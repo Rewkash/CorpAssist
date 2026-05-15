@@ -139,9 +139,10 @@
 .supportRoot .messagesList::-webkit-scrollbar-thumb { background: #5a5a72; }
 
 .supportRoot .dialogList { padding: 8px; flex: 1; }
-.supportRoot .dialogCard { width: 100%; border: 1px solid transparent; background: #17171d; border-radius: 12px; padding: 10px; margin-bottom: 8px; cursor: pointer; text-align: left; color: inherit; }
+.supportRoot .dialogCard { width: 100%; border: 1px solid transparent; background: #17171d; border-radius: 12px; padding: 10px; margin-bottom: 8px; cursor: pointer; text-align: left; color: inherit; position: relative; }
 .supportRoot .dialogCard.active { border-color: rgba(108, 99, 255, 0.55); background: linear-gradient(180deg, rgba(108, 99, 255, 0.16), rgba(108, 99, 255, 0.05)); }
 .supportRoot .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.supportRoot .row > * { min-width: 0; }
 .supportRoot .ticket { font-size: 12px; color: var(--muted); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .supportRoot .priorityDot { color: #ff7f45; font-size: 10px; line-height: 1; }
 .supportRoot .time { font-size: 11px; color: var(--muted); }
@@ -163,6 +164,9 @@
   color: #ffffff;
   background: #ff5b6d;
   border: 1px solid rgba(255, 255, 255, 0.25);
+  position: absolute;
+  top: 10px;
+  right: 12px;
 }
 
 .supportRoot .center { min-width: 0; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; position: relative; }
@@ -176,6 +180,7 @@
   text-overflow: ellipsis;
 }
 .supportRoot .headerActions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.supportRoot .headerActionBtn { min-width: 0; }
 .supportRoot .headerActionBtn { display: inline-flex; align-items: center; gap: 6px; }
 .supportRoot .headerActionBtn .actionIcon { display: none; font-size: 14px; line-height: 1; }
 .supportRoot .headerActionBtn .actionLabel { display: inline; }
@@ -196,11 +201,60 @@
   padding: 16px 20px;
   overflow-y: scroll;
   background: radial-gradient(80% 130% at 100% -20%, rgba(108, 99, 255, 0.09), transparent 42%), radial-gradient(80% 130% at 0% -35%, rgba(255, 255, 255, 0.03), transparent 42%), #121217;
+  animation: messagesAppear 0.2s ease-out;
+}
+
+@keyframes messagesAppear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .supportRoot .messageWrap { display: flex; margin-bottom: 10px; }
 .supportRoot .messageWrap.client { justify-content: flex-start; }
 .supportRoot .messageWrap.operator { justify-content: flex-end; }
+.supportRoot .unreadDivider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6c63ff;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.supportRoot .unreadDivider.hiding {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.supportRoot .unreadDivider::before,
+.supportRoot .unreadDivider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(108, 99, 255, 0.35);
+}
+
+.supportRoot .messageWrap.highlightNew .bubble {
+  animation: unreadHighlight 3s ease-out;
+}
+
+@keyframes unreadHighlight {
+  0% {
+    box-shadow: inset 0 0 0 1px rgba(108, 99, 255, 0.5), 0 0 12px rgba(108, 99, 255, 0.15);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
 .supportRoot .bubbleCol { display: flex; flex-direction: column; max-width: min(72ch, 78%); }
 .supportRoot .bubble { padding: 11px 13px; border-radius: 14px; font-size: 14px; line-height: 1.45; border: 1px solid transparent; box-shadow: var(--shadow); white-space: pre-wrap; word-break: break-word; }
 .supportRoot .bubble.client { background: var(--bubble-client); border-color: #2c2c36; border-top-left-radius: 6px; }
@@ -269,6 +323,7 @@
   transform: translateX(-50%);
   bottom: 138px;
   z-index: 12;
+  animation: jumpSlideIn 0.2s ease-out;
 }
 
 .supportRoot .jumpBtn {
@@ -288,6 +343,26 @@
   cursor: pointer;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
   position: relative;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.supportRoot .jumpBtn:hover {
+  background: #28283a;
+}
+
+.supportRoot .jumpBtn:active {
+  transform: scale(0.92);
+}
+
+@keyframes jumpSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .supportRoot .jumpArrow {
@@ -344,12 +419,18 @@
 
 .supportRoot .rightHeader { justify-content: space-between; padding-inline: 12px; }
 .supportRoot .rightBody { padding: 12px; display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.supportRoot .rightBody::-webkit-scrollbar { width: 8px; }
+.supportRoot .rightBody::-webkit-scrollbar-track { background: transparent; }
+.supportRoot .rightBody::-webkit-scrollbar-thumb { background: #3b3b48; border-radius: 999px; }
+.supportRoot .rightBody::-webkit-scrollbar-thumb:hover { background: #5a5a72; }
+.supportRoot .rightBody { scrollbar-width: thin; scrollbar-color: #3b3b48 transparent; }
 .supportRoot .card { background: #181820; border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
 .supportRoot .historyCard { display: flex; flex-direction: column; }
 .supportRoot .growList { min-height: 0; }
 .supportRoot .cardTitle { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 10px; font-weight: 700; }
 .supportRoot .kv { display: grid; grid-template-columns: 84px 1fr; gap: 6px; font-size: 13px; padding: 5px 0; }
 .supportRoot .kvKey { color: var(--muted); }
+.supportRoot .kv > :last-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .supportRoot .historyList { overflow-y: auto; max-height: 280px; padding-right: 2px; }
 .supportRoot .historyList::-webkit-scrollbar { width: 4px; }
 .supportRoot .historyList::-webkit-scrollbar-track { background: transparent; }
@@ -381,6 +462,7 @@
 .supportRoot .historyStatus.closed { color: #d5dbe8; background: rgba(128, 138, 160, 0.16); border-color: rgba(128, 138, 160, 0.35); }
 .supportRoot .historyPreview { color: #d7d7df; font-size: 12px; line-height: 1.35; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .supportRoot .historyMeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
+.supportRoot .historyMeta > * { min-width: 0; }
 
 .supportRoot .historyTop {
   display: flex;
@@ -398,6 +480,21 @@
 .supportRoot .tags { display: flex; gap: 8px; flex-wrap: wrap; }
 .supportRoot .tag { border: 1px solid #323241; background: #131319; border-radius: 999px; padding: 5px 9px; font-size: 11px; color: #d9d9e3; }
 .supportRoot .tagWithClose { display: inline-flex; align-items: center; gap: 6px; }
+
+.supportRoot .ticket,
+.supportRoot .time,
+.supportRoot .badge,
+.supportRoot .historyTicket,
+.supportRoot .historyStatus,
+.supportRoot .historyDate,
+.supportRoot .tag,
+.supportRoot .name,
+.supportRoot .sub {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .supportRoot .tagClose { border: none; background: transparent; color: #8f92a8; cursor: pointer; padding: 0; font-size: 13px; line-height: 1; }
 .supportRoot .tagAddBtn { border: 1px dashed #4a4a5b; background: #14141a; color: #cfd2e7; border-radius: 999px; padding: 5px 10px; font-size: 11px; cursor: pointer; }
 .supportRoot .tagManualRow { display: grid; grid-template-columns: 1fr auto; gap: 8px; }

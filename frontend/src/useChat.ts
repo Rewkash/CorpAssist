@@ -18,6 +18,21 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
   const reconnectAttemptRef = useRef(0)
   const updatesReconnectAttemptRef = useRef(0)
   const [connected, setConnected] = useState(false)
+  const onMessageCreatedRef = useRef(onMessageCreated)
+  const onConversationsSnapshotRef = useRef(onConversationsSnapshot)
+  const onConnectionStateChangeRef = useRef(onConnectionStateChange)
+
+  useEffect(() => {
+    onMessageCreatedRef.current = onMessageCreated
+  }, [onMessageCreated])
+
+  useEffect(() => {
+    onConversationsSnapshotRef.current = onConversationsSnapshot
+  }, [onConversationsSnapshot])
+
+  useEffect(() => {
+    onConnectionStateChangeRef.current = onConnectionStateChange
+  }, [onConnectionStateChange])
 
   useEffect(() => {
     const clearReconnect = () => {
@@ -46,7 +61,7 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data)
         if (payload.type === 'conversations_snapshot' && Array.isArray(payload.payload)) {
-          onConversationsSnapshot(payload.payload as Conversation[])
+          onConversationsSnapshotRef.current(payload.payload as Conversation[])
         }
       }
 
@@ -77,7 +92,7 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
         updatesSocketRef.current = null
       }
       setConnected(false)
-      onConnectionStateChange?.(false)
+       onConnectionStateChangeRef.current?.(false)
       return
     }
 
@@ -93,7 +108,7 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
         socketRef.current = null
       }
       setConnected(false)
-      onConnectionStateChange?.(false)
+      onConnectionStateChangeRef.current?.(false)
       return () => {
         alive = false
         aliveRef.value = false
@@ -110,7 +125,7 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
           updatesSocketRef.current = null
         }
         setConnected(false)
-        onConnectionStateChange?.(false)
+        onConnectionStateChangeRef.current?.(false)
       }
     }
 
@@ -122,22 +137,22 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
       socket.onopen = () => {
         reconnectAttemptRef.current = 0
         setConnected(true)
-        onConnectionStateChange?.(true)
+        onConnectionStateChangeRef.current?.(true)
       }
 
       socket.onmessage = (event) => {
         const payload = JSON.parse(event.data)
         if (payload.type === 'message_created' && payload.payload) {
-          onMessageCreated(payload.payload as ChatMessage)
+          onMessageCreatedRef.current(payload.payload as ChatMessage)
         }
         if (payload.type === 'conversations_snapshot' && Array.isArray(payload.payload)) {
-          onConversationsSnapshot(payload.payload as Conversation[])
+          onConversationsSnapshotRef.current(payload.payload as Conversation[])
         }
       }
 
       socket.onclose = () => {
         setConnected(false)
-        onConnectionStateChange?.(false)
+        onConnectionStateChangeRef.current?.(false)
         if (!alive) return
         const attempt = reconnectAttemptRef.current + 1
         reconnectAttemptRef.current = attempt
@@ -168,9 +183,9 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
         updatesSocketRef.current = null
       }
       setConnected(false)
-      onConnectionStateChange?.(false)
+      onConnectionStateChangeRef.current?.(false)
     }
-  }, [token, conversationId, onMessageCreated, onConversationsSnapshot, onConnectionStateChange])
+  }, [token, conversationId])
 
   return { connected }
 }

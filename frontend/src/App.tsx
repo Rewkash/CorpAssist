@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import './supportChat.css'
 
 import { assignWorker, closeConversation, getClientConversationHistory, getClients, getConversations, getMessages, getWorkers, improveDraft, login, markMessagesRead, me, register, sendMessage, setConversationTags, startConversation, suggestConversationTags, suggestReply, takeConversation } from './api'
-import type { Conversation } from './api'
+import type { ChatMessage, Conversation } from './api'
 import { useChat } from './useChat'
 import { useAssistStore } from './store'
 
@@ -76,7 +76,7 @@ function AuthScreen() {
 
 function ChatScreen() {
   const { token, role, email, theme, toggleTheme, logout, conversationId, setConversationId } = useAssistStore()
-  const [messages, setMessages] = useState<{ id: number; sender_id: number; text: string; created_at?: string }[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const [connectionError, setConnectionError] = useState(false)
@@ -93,7 +93,11 @@ function ChatScreen() {
   const openedConversationsRef = useRef<Record<number, boolean>>({})
   const forceScrollOnNextRenderRef = useRef(false)
   const isAtBottomRef = useRef(true)
+  const isScrollingToBottomRef = useRef(false)
   const reconnectPhaseStartedAtRef = useRef<number | null>(null)
+  const [firstUnreadId, setFirstUnreadId] = useState<number | null>(null)
+  const [isUnreadDividerHiding, setIsUnreadDividerHiding] = useState(false)
+  const unreadDividerHideTimerRef = useRef<number | null>(null)
   const [newMessagesCount, setNewMessagesCount] = useState(0)
   const [showJumpDown, setShowJumpDown] = useState(false)
   const [jumpBottomOffset, setJumpBottomOffset] = useState(138)
@@ -115,6 +119,30 @@ function ChatScreen() {
   const bottomPanelRef = useRef<HTMLDivElement | null>(null)
   const frequentTags = ['Миграция', 'Срочно', 'VIP', 'Ожидание', 'Технический', 'Оплата']
 
+  const scrollToUnreadAnchor = (behavior: ScrollBehavior = 'auto') => {
+    const el = messagesRef.current
+    if (!el) return false
+    const anchor = el.querySelector('#unread-anchor') as HTMLElement | null
+    if (!anchor) return false
+    const targetTop = Math.max(0, anchor.offsetTop - el.clientHeight / 2 + anchor.clientHeight / 2)
+    el.scrollTo({ top: targetTop, behavior })
+    return true
+  }
+
+  const clearUnreadDividerSmooth = () => {
+    if (firstUnreadId === null) return
+    if (unreadDividerHideTimerRef.current !== null) {
+      window.clearTimeout(unreadDividerHideTimerRef.current)
+      unreadDividerHideTimerRef.current = null
+    }
+    setIsUnreadDividerHiding(true)
+    unreadDividerHideTimerRef.current = window.setTimeout(() => {
+      setFirstUnreadId(null)
+      setIsUnreadDividerHiding(false)
+      unreadDividerHideTimerRef.current = null
+    }, 220)
+  }
+
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
@@ -132,6 +160,14 @@ function ChatScreen() {
       setRightCollapsed(false)
     }
   }, [viewportWidth])
+
+  useEffect(() => {
+    return () => {
+      if (unreadDividerHideTimerRef.current !== null) {
+        window.clearTimeout(unreadDividerHideTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!token) return
@@ -186,12 +222,15 @@ function ChatScreen() {
 
         if (convId) {
           const items = await getMessages(token, convId)
+          const firstUnread = items.find((m) => m.sender_id !== profile.id && !m.read_at)
+          setFirstUnreadId(firstUnread?.id ?? null)
           forceScrollOnNextRenderRef.current = true
           setMessages(items)
           await markMessagesRead(token, convId)
         } else {
           setSelectedConversation(null)
           setMessages([])
+          setFirstUnreadId(null)
         }
         if (role === 'admin') {
             const [clientList, workerList] = await Promise.all([getClients(token), getWorkers(token)])
@@ -314,11 +353,22 @@ function ChatScreen() {
         }, 0)
         isAtBottomRef.current = true
       }
-      scrollToBottomHard()
+      if (firstUnreadId) {
+        if (scrollToUnreadAnchor('auto')) {
+          isAtBottomRef.current = false
+          setShowJumpDown(true)
+        } else {
+          scrollToBottomHard()
+        }
+      } else {
+        scrollToBottomHard()
+      }
       if (conversationId) openedConversationsRef.current[conversationId] = true
       forceScrollOnNextRenderRef.current = false
       setNewMessagesCount(0)
-      setShowJumpDown(false)
+      if (!firstUnreadId) {
+        setShowJumpDown(false)
+      }
       prevMessagesCountRef.current = messages.length
       prevIncomingCountRef.current = messages.filter((m) => myId === null || m.sender_id !== myId).length
     } else {
@@ -328,6 +378,9 @@ function ChatScreen() {
         setNewMessagesCount(0)
         setShowJumpDown(false)
         prevIncomingCountRef.current = incomingCount
+        if (messages.length > prevMessagesCountRef.current) {
+          el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+        }
       } else if (messages.length > prevMessagesCountRef.current) {
         const incomingDelta = Math.max(0, incomingCount - prevIncomingCountRef.current)
         if (incomingDelta > 0) {
@@ -339,7 +392,7 @@ function ChatScreen() {
       prevIncomingCountRef.current = incomingCount
     }
     prevConversationRef.current = conversationId
-  }, [messages, conversationId])
+  }, [messages, conversationId, firstUnreadId])
 
   const handleMessagesScroll = () => {
     const el = messagesRef.current
@@ -349,8 +402,14 @@ function ChatScreen() {
       setNewMessagesCount(0)
       setShowJumpDown(false)
       isAtBottomRef.current = true
+      isScrollingToBottomRef.current = false
+      if (token && conversationId) {
+        markMessagesRead(token, conversationId).catch(() => {})
+      }
     } else {
-      setShowJumpDown(true)
+      if (!isScrollingToBottomRef.current) {
+        setShowJumpDown(true)
+      }
       isAtBottomRef.current = false
     }
   }
@@ -358,7 +417,23 @@ function ChatScreen() {
   const jumpToBottom = () => {
     const el = messagesRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    if (firstUnreadId) {
+      const anchor = el.querySelector('#unread-anchor') as HTMLElement | null
+      if (anchor) {
+        const targetTop = Math.max(0, anchor.offsetTop - el.clientHeight / 2 + anchor.clientHeight / 2)
+        const alreadyAtUnread = Math.abs(el.scrollTop - targetTop) < 40
+        if (!alreadyAtUnread) {
+          isScrollingToBottomRef.current = true
+          el.scrollTo({ top: targetTop, behavior: 'smooth' })
+          return
+        }
+      }
+      if (scrollToUnreadAnchor('smooth')) {
+        isScrollingToBottomRef.current = true
+      }
+    }
+    isScrollingToBottomRef.current = true
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
     setNewMessagesCount(0)
     setShowJumpDown(false)
     isAtBottomRef.current = true
@@ -395,6 +470,7 @@ function ChatScreen() {
 
       const item = await sendMessage(token, targetConversationId, outgoingText)
       setMessages((prev) => [...prev, item])
+      clearUnreadDividerSmooth()
       setText('')
       const items = await getMessages(token, targetConversationId)
       forceScrollOnNextRenderRef.current = true
@@ -463,8 +539,11 @@ function ChatScreen() {
       setConversations(list)
       setSelectedConversation((current) => list.find((c) => c.id === id) || current || null)
       setClientHistory(history.length > 0 ? history : list.filter((c) => c.id === id))
+      const firstUnread = items.find((m) => m.sender_id !== myId && !m.read_at)
+      setFirstUnreadId(firstUnread?.id ?? null)
       forceScrollOnNextRenderRef.current = true
       setMessages(items)
+      await markMessagesRead(token, id)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось взять диалог')
     }
@@ -533,6 +612,7 @@ function ChatScreen() {
     setSelectedConversation(null)
     setClientHistory([])
     setMessages([])
+    setFirstUnreadId(null)
     setText('')
     setError('')
     setAssistHint('Новый диалог будет создан после первого сообщения.')
@@ -581,16 +661,19 @@ function ChatScreen() {
     }
   }
 
-  const handleSocketMessageCreated = useCallback((message: { id: number; conversation_id: number; sender_id: number; text: string; created_at?: string }) => {
+  const handleSocketMessageCreated = useCallback((message: ChatMessage) => {
     if (!conversationId || message.conversation_id !== conversationId) return
     setMessages((prev) => {
       if (prev.some((item) => item.id === message.id)) return prev
       return [...prev, message]
     })
+    if (myId !== null && message.sender_id !== myId && !message.read_at && firstUnreadId === null && !isAtBottomRef.current) {
+      setFirstUnreadId(message.id)
+    }
     if (token && isAtBottomRef.current) {
       markMessagesRead(token, conversationId).catch(() => {})
     }
-  }, [conversationId, token])
+  }, [conversationId, token, myId, firstUnreadId])
 
   const handleSocketConversationsSnapshot = useCallback((items: Conversation[]) => {
     setConversations(items)
@@ -639,12 +722,12 @@ function ChatScreen() {
           <div className="dialogList">
             {filteredConversations.map((c) => (
               <button key={c.id} onClick={() => onTakeConversation(c.id)} className={clsx('dialogCard', conversationId === c.id && 'active')}>
+                {c.unread_count > 0 && <span className="unreadBadge">{c.unread_count}</span>}
                 <div className="row">
                   <span className="ticket">
                     {role !== 'client' && c.priority_at && <span className="priorityDot" aria-hidden="true">●</span>}
                     Диалог #{c.id}
                   </span>
-                  <span className="time">{c.status === 'closed' ? 'Закрыт' : c.worker_id ? 'В работе' : 'Новый'}</span>
                 </div>
                 <div className="preview">{c.title}</div>
                 <div className="row" style={{ marginTop: 8 }}>
@@ -652,7 +735,6 @@ function ChatScreen() {
                     {c.status === 'closed' ? 'Закрыт' : c.worker_id ? 'Назначен' : 'Свободен'}
                   </span>
                   {role !== 'client' && c.priority_at && <span className="badge urgent">Срочно</span>}
-                  {c.unread_count > 0 && <span className="unreadBadge">{c.unread_count}</span>}
                 </div>
               </button>
             ))}
@@ -683,23 +765,31 @@ function ChatScreen() {
               <button className="collapseBtn" title="Свернуть правую панель" onClick={() => setRightCollapsed((v) => !v)}>{rightCollapsed ? '◀' : '▶'}</button>
             </div>
           </div>
-          <div ref={messagesRef} onScroll={handleMessagesScroll} className="messagesList">
+          <div key={conversationId ?? 'empty'} ref={messagesRef} onScroll={handleMessagesScroll} className="messagesList">
             {messages.length === 0 ? (
               <div className="emptyState"><div className="emptyCard">Сообщений пока нет</div></div>
             ) : (
               messages.map((m) => {
                 const mine = myId !== null && m.sender_id === myId
+                const isFirstUnread = m.id === firstUnreadId
                 const time = m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
                 const checks = m.status === 'sent' ? '✓' : '✓✓'
                 const checksClass = m.status === 'read' ? 'text-sky-300' : 'text-slate-300'
                 return (
-                  <div key={m.id} className={clsx('messageWrap', mine ? 'operator' : 'client')}>
-                    <div className="bubbleCol">
-                      <div className={clsx('bubble', mine ? 'operator' : 'client')}>
-                        <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
+                  <div key={m.id}>
+                    {isFirstUnread && (
+                      <div className={clsx('unreadDivider', isUnreadDividerHiding && 'hiding')} id="unread-anchor">
+                        <span>Новые сообщения</span>
                       </div>
-                      <div className="msgTime">
-                        {time} {mine && <span className={checksClass}>{checks}</span>}
+                    )}
+                    <div className={clsx('messageWrap', mine ? 'operator' : 'client', isFirstUnread && 'highlightNew')}>
+                      <div className="bubbleCol">
+                        <div className={clsx('bubble', mine ? 'operator' : 'client')}>
+                          <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
+                        </div>
+                        <div className="msgTime">
+                          {time} {mine && <span className={checksClass}>{checks}</span>}
+                        </div>
                       </div>
                     </div>
                   </div>
