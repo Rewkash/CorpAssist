@@ -269,6 +269,18 @@
   transform: translateX(-50%);
   bottom: 138px;
   z-index: 12;
+  animation: jumpSlideIn 0.2s ease-out;
+}
+
+@keyframes jumpSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 
 .supportRoot .jumpBtn {
@@ -288,6 +300,15 @@
   cursor: pointer;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
   position: relative;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.supportRoot .jumpBtn:hover {
+  background: #28283a;
+}
+
+.supportRoot .jumpBtn:active {
+  transform: scale(0.92);
 }
 
 .supportRoot .jumpArrow {

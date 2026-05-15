@@ -328,6 +328,7 @@ function ChatScreen() {
         setNewMessagesCount(0)
         setShowJumpDown(false)
         prevIncomingCountRef.current = incomingCount
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
       } else if (messages.length > prevMessagesCountRef.current) {
         const incomingDelta = Math.max(0, incomingCount - prevIncomingCountRef.current)
         if (incomingDelta > 0) {
@@ -358,7 +359,7 @@ function ChatScreen() {
   const jumpToBottom = () => {
     const el = messagesRef.current
     if (!el) return
-    el.scrollTop = el.scrollHeight
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
     setNewMessagesCount(0)
     setShowJumpDown(false)
     isAtBottomRef.current = true
