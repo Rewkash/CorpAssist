@@ -567,7 +567,12 @@ async def suggest_conversation_tags(
     if not messages:
         return {'tags': []}
 
-    full_text = ' '.join([m.text for m in messages])[:8000]
+    full_text = '\n'.join(
+        [
+            f'Клиент: {m.text}' if m.sender_id == conversation.client_id else f'Оператор: {m.text}'
+            for m in messages
+        ]
+    )[:8000]
 
     ai_tags = await generator_service.suggest_tags(full_text)
     if ai_tags:
@@ -581,8 +586,6 @@ async def suggest_conversation_tags(
             tags.append(topic_clean)
     if analysis.sentiment == 'tense' and 'Приоритет' not in tags:
         tags.insert(0, 'Приоритет')
-    if 'Поддержка' not in tags:
-        tags.append('Поддержка')
     return {'tags': tags}
 
 

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     redis_url: str = 'redis://redis:6379/0'
 
     ollama_base_url: str = 'http://ollama:11434'
-    ollama_model: str = 'qwen2.5:3b'
+    ollama_model: str = 'gemma3:4b'
 
     @property
     def database_url(self) -> str:
