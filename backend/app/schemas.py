@@ -96,6 +96,7 @@ class SuggestReplyResponse(BaseModel):
 
 class ImproveDraftRequest(BaseModel):
     text: str = Field(min_length=5, max_length=8000)
+    conversation_id: int | None = None
 
 
 class DiffChunk(BaseModel):

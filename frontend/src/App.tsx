@@ -521,7 +521,7 @@ function ChatScreen() {
     setGeneratingStatus('Генерация ответа нейросетью...')
     setError('')
     try {
-      const result = await improveDraft(token, text.trim())
+      const result = await improveDraft(token, text.trim(), conversationId ?? undefined)
       setText(result.improved_text)
       setAssistHint('Готово: текст стал более деловым и понятным.')
     } catch (err) {

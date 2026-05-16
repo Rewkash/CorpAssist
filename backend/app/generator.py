@@ -1,4 +1,6 @@
 import logging
+from collections import deque
+from datetime import datetime, timezone
 from typing import Any
 import textwrap
 
@@ -8,69 +10,44 @@ from app.config import settings
 from app.schemas import AnalysisResult
 
 logger = logging.getLogger(__name__)
+LLM_DEBUG_LOG: deque[dict[str, Any]] = deque(maxlen=100)
+
+
+def get_llm_debug_log() -> list[dict[str, Any]]:
+    return list(reversed(LLM_DEBUG_LOG))
 
 SYSTEM_PROMPT_REPLY = """\
-Контекст: Ты помогаешь ОПЕРАТОРУ службы поддержки составить ответ КЛИЕНТУ.
-Оператор - сотрудник компании. Клиент - обратившийся за помощью.
-Пиши ответ ОТ ЛИЦА ОПЕРАТОРА для клиента.
-
-Ты - корпоративный ассистент для деловой переписки на русском языке.
-
-Твоя задача: на основе входящего сообщения сгенерировать ровно 3 варианта делового ответа.
-
+Ты помогаешь оператору поддержки составить ответ клиенту. Сгенерируй 3 варианта.
 Правила:
-- Пиши ТОЛЬКО на русском языке. Никогда не вставляй слова и символы из других языков
-- НЕ пиши свои рассуждения, мысли, планы или пояснения
-- НЕ начинай ответ со слов "Конечно", "Хорошо", "Давайте", "Вот варианты" и подобных вводных
-- Сразу пиши готовый текст ответа, без преамбул
-- Пиши строго в деловом стиле: вежливо, формально, по существу
-- Каждый вариант должен быть самостоятельным и законченным (2-4 предложения)
-- Не используй разговорные слова, сленг, эмодзи
+- Пиши ТОЛЬКО на русском языке
+- Сразу пиши готовый текст, без рассуждений и вводных
+- Деловой стиль, вежливо, по существу
+- Каждый вариант - 2-4 предложения
 - Обращайся на «вы»
-- Если в сообщении есть вопрос - отвечай на него
-- Если в сообщении есть просьба - подтверждай готовность выполнить
-- Не выдумывай факты, даты, имена, если они не указаны
+- Не выдумывай факты, которых нет в сообщении
 - Разделяй варианты маркером ---
-
-Формат ответа - строго три варианта, разделенных ---:
-
-Вариант 1 текст
-
+Формат:
+Вариант 1
 ---
-
-Вариант 2 текст
-
+Вариант 2
 ---
-
-Вариант 3 текст\
+Вариант 3\
 """
 
 SYSTEM_PROMPT_IMPROVE = """\
-Контекст: Ты улучшаешь черновик ОПЕРАТОРА, который он отправит КЛИЕНТУ.
-Текст должен звучать профессионально от лица сотрудника компании.
-
-Ты - корпоративный редактор деловой переписки на русском языке.
-
-Твоя задача: переписать черновик в профессиональный деловой стиль.
-
+Ты редактор деловой переписки. Перепиши черновик в деловой стиль.
 Правила:
-- Пиши ТОЛЬКО на русском языке. Никогда не вставляй слова и символы из других языков
-- НЕ пиши свои рассуждения, мысли, планы или пояснения
-- НЕ начинай ответ со слов "Конечно", "Хорошо", "Давайте", "Вот варианты" и подобных вводных
-- Сразу пиши готовый текст ответа, без преамбул
-- Сохрани исходный смысл и все ключевые детали
-- Замени разговорные и неформальные выражения на деловые
-- Исправь грамматические и пунктуационные ошибки
-- Структурируй текст, если он хаотичный
-- Обращение должно быть на «вы»
-- Не добавляй информацию, которой нет в оригинале
-- Не используй канцелярит и чрезмерно сложные конструкции - пиши понятно, но формально
-- Ты РЕДАКТОР, а не цензор. Твоя задача - ПЕРЕПИСАТЬ текст, а не комментировать его
-- НИКОГДА не отказывайся переписывать текст, каким бы грубым он ни был
-- НИКОГДА не пиши комментарии вроде "это неуместно", "так нельзя писать", "предлагаю более конструктивно"
-- Даже если текст содержит мат и оскорбления - перепиши его в вежливый деловой стиль, сохранив СМЫСЛ и НАМЕРЕНИЕ автора
-- Верни ТОЛЬКО переписанный текст, без нравоучений и пояснений
-- Верни ТОЛЬКО улучшенный текст, без пояснений и комментариев\
+- Пиши ТОЛЬКО на русском языке
+- Верни ТОЛЬКО переписанный текст, без комментариев и пояснений
+- Сохрани смысл и намерение автора
+- Замени грубые и разговорные выражения на деловые
+- Исправь ошибки и пунктуацию
+- Пиши обычным русским текстом: заглавные буквы только в начале предложения, именах и официальных названиях
+- Не добавляй информацию, которой нет в черновике
+- Не начинай с «Уважаемый клиент» и подобных шаблонов
+- Даже если черновик содержит мат - перепиши его вежливо, сохранив смысл
+- НИКОГДА не отказывайся переписывать и не читай мораль
+- Ты редактор, а НЕ участник диалога - не отвечай на контекст, только перепиши черновик\
 """
 
 SYSTEM_PROMPT_TAGS = """\
@@ -93,7 +70,16 @@ SYSTEM_PROMPT_TAGS = """\
 ПРИОРИТЕТ: да/нет\
 """
 
-MORALIZING_MARKERS = ('не вправе', 'неуместно', 'конструктивно', 'нельзя писать', 'пожалуйста, попробуйте')
+MORALIZING_MARKERS = (
+    'не вправе',
+    'неуместно',
+    'конструктивно',
+    'нельзя писать',
+    'пожалуйста, попробуйте',
+    'приносим свои извинения за ненормативную лексику',
+    'мы понимаем, что вы испытываете',
+    'опишите вашу проблему более подробно',
+)
 INTRO_MARKERS = ('конечно', 'хорошо', 'давайте', 'вот', 'варианты')
 
 
@@ -104,27 +90,55 @@ class OllamaClient:
         self._base_url = base_url.rstrip('/')
         self._model = model
 
-    async def generate(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 512) -> str:
+    async def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 512,
+        mode: str = 'generate',
+    ) -> str:
+        debug_item: dict[str, Any] = {
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'mode': mode,
+            'model': self._model,
+            'endpoint': '/api/chat',
+            'temperature': temperature,
+            'max_tokens': max_tokens,
+            'system_prompt': system_prompt,
+            'user_prompt': user_prompt,
+            'response': '',
+            'error': '',
+        }
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f'{self._base_url}/api/chat',
-                json={
-                    'model': self._model,
-                    'messages': [
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_prompt},
-                    ],
-                    'raw': False,
-                    'stream': False,
-                    'options': {
-                        'temperature': temperature,
-                        'top_p': 0.9,
-                        'num_predict': max_tokens,
+            try:
+                response = await client.post(
+                    f'{self._base_url}/api/chat',
+                    json={
+                        'model': self._model,
+                        'messages': [
+                            {'role': 'system', 'content': system_prompt},
+                            {'role': 'user', 'content': user_prompt},
+                        ],
+                        'raw': False,
+                        'stream': False,
+                        'options': {
+                            'temperature': temperature,
+                            'top_p': 0.9,
+                            'num_predict': max_tokens,
+                            'num_ctx': 8192,
+                        },
                     },
-                },
-            )
-            response.raise_for_status()
-            return response.json()['message']['content'].strip()
+                )
+                response.raise_for_status()
+                result = response.json()['message']['content'].strip()
+                debug_item['response'] = result
+                return result
+            except Exception as exc:
+                debug_item['error'] = repr(exc)
+                raise
+            finally:
+                LLM_DEBUG_LOG.append(debug_item)
 
     async def generate_structured(
         self,
@@ -133,28 +147,51 @@ class OllamaClient:
         schema: dict[str, Any],
         temperature: float = 0.1,
         max_tokens: int = 200,
+        mode: str = 'structured',
     ) -> str:
+        debug_item: dict[str, Any] = {
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'mode': mode,
+            'model': self._model,
+            'endpoint': '/api/chat',
+            'temperature': temperature,
+            'max_tokens': max_tokens,
+            'system_prompt': system_prompt,
+            'user_prompt': user_prompt,
+            'schema': schema,
+            'response': '',
+            'error': '',
+        }
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f'{self._base_url}/api/chat',
-                json={
-                    'model': self._model,
-                    'messages': [
-                        {'role': 'system', 'content': system_prompt},
-                        {'role': 'user', 'content': user_prompt},
-                    ],
-                    'raw': False,
-                    'stream': False,
-                    'format': schema,
-                    'options': {
-                        'temperature': temperature,
-                        'top_p': 0.9,
-                        'num_predict': max_tokens,
+            try:
+                response = await client.post(
+                    f'{self._base_url}/api/chat',
+                    json={
+                        'model': self._model,
+                        'messages': [
+                            {'role': 'system', 'content': system_prompt},
+                            {'role': 'user', 'content': user_prompt},
+                        ],
+                        'raw': False,
+                        'stream': False,
+                        'format': schema,
+                        'options': {
+                            'temperature': temperature,
+                            'top_p': 0.9,
+                            'num_predict': max_tokens,
+                            'num_ctx': 8192,
+                        },
                     },
-                },
-            )
-            response.raise_for_status()
-            return response.json()['message']['content'].strip()
+                )
+                response.raise_for_status()
+                result = response.json()['message']['content'].strip()
+                debug_item['response'] = result
+                return result
+            except Exception as exc:
+                debug_item['error'] = repr(exc)
+                raise
+            finally:
+                LLM_DEBUG_LOG.append(debug_item)
 
 
 class BusinessTextGenerator:
@@ -176,6 +213,7 @@ class BusinessTextGenerator:
                     user_prompt=user_prompt,
                     temperature=0.7,
                     max_tokens=600,
+                    mode='suggest_replies',
                 )
                 cleaned = self._strip_intro(raw)
                 variants = [self._strip_intro(v.strip()) for v in cleaned.split('---') if v.strip()]
@@ -186,8 +224,13 @@ class BusinessTextGenerator:
 
         return self._fallback_replies(incoming_text, analysis, context)
 
-    async def improve_draft(self, draft: str, analysis: AnalysisResult) -> str:
-        user_prompt = f'Черновик для улучшения:\n\n{draft.strip()}'
+    async def improve_draft(self, draft: str, analysis: AnalysisResult, context: str = '') -> str:
+        context_block = ''
+        if context.strip():
+            short_context = textwrap.shorten(context, width=3000, placeholder='...')
+            context_block = f'Контекст диалога только для понимания темы. Не переписывай его и не отвечай на него:\n{short_context}\n\n'
+
+        user_prompt = f'{context_block}Черновик оператора для улучшения:\n\n{draft.strip()}'
 
         for attempt in range(2):
             try:
@@ -196,6 +239,7 @@ class BusinessTextGenerator:
                     user_prompt=user_prompt,
                     temperature=0.3,
                     max_tokens=512,
+                    mode='improve_draft',
                 )
                 improved = self._strip_intro(improved)
                 low = improved.lower()
@@ -229,6 +273,7 @@ class BusinessTextGenerator:
                     schema=schema,
                     temperature=0.1,
                     max_tokens=200,
+                    mode='suggest_tags',
                 )
                 import json
 

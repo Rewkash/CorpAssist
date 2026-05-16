@@ -2,11 +2,13 @@ import json
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from html import escape
 from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from redis.asyncio import from_url as redis_from_url
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +17,7 @@ from app.auth import create_access_token, decode_access_token, hash_password, ve
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine, get_db
 from app.deps import get_current_user, require_role
-from app.generator import generator_service
+from app.generator import generator_service, get_llm_debug_log
 from app.models import ChatMessage, Conversation, MessageHistory, User
 from app.nlp import nlp_service
 from app.schemas import (
@@ -53,6 +55,21 @@ async def build_client_context(db: AsyncSession, client_id: int) -> str:
     return '\n'.join(result_lines)
 
 
+async def build_conversation_context(db: AsyncSession, conversation: Conversation) -> str:
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.conversation_id == conversation.id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(30)
+    )
+    items = result.scalars().all()
+    result_lines: list[str] = []
+    for item in reversed(items):
+        role = 'Клиент' if item.sender_id == conversation.client_id else 'Оператор'
+        result_lines.append(f'{role}: {item.text}')
+    return '\n'.join(result_lines)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
@@ -83,6 +100,78 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+
+@app.get('/debug/llm', response_class=HTMLResponse, include_in_schema=False)
+async def llm_debug_page() -> str:
+    items = get_llm_debug_log()
+    cards = []
+    for index, item in enumerate(items, start=1):
+        error = item.get('error') or ''
+        status = 'error' if error else 'ok'
+        schema = item.get('schema')
+        schema_block = ''
+        if schema:
+            schema_block = f'<h3>JSON schema</h3><pre>{escape(json.dumps(schema, ensure_ascii=False, indent=2))}</pre>'
+        cards.append(
+            f'''
+            <section class="card {status}">
+              <div class="meta">
+                <strong>#{index} {escape(str(item.get('mode', '')))}</strong>
+                <span>{escape(str(item.get('created_at', '')))}</span>
+                <span>model: {escape(str(item.get('model', '')))}</span>
+                <span>temp: {escape(str(item.get('temperature', '')))}</span>
+                <span>tokens: {escape(str(item.get('max_tokens', '')))}</span>
+              </div>
+              {'<p class="error">' + escape(error) + '</p>' if error else ''}
+              <h3>System prompt</h3>
+              <pre>{escape(str(item.get('system_prompt', '')))}</pre>
+              <h3>User prompt</h3>
+              <pre>{escape(str(item.get('user_prompt', '')))}</pre>
+              {schema_block}
+              <h3>LLM response</h3>
+              <pre>{escape(str(item.get('response', '')))}</pre>
+            </section>
+            '''
+        )
+
+    body = '\n'.join(cards) or '<p class="empty">Пока нет вызовов нейронки. Выполни подсказку ответа, улучшение текста или теги.</p>'
+    return f'''
+    <!doctype html>
+    <html lang="ru">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta http-equiv="refresh" content="5">
+      <title>LLM Debug</title>
+      <style>
+        body {{ margin: 0; padding: 24px; background: #0f172a; color: #e5e7eb; font-family: Arial, sans-serif; }}
+        header {{ display: flex; justify-content: space-between; gap: 16px; align-items: baseline; margin-bottom: 18px; }}
+        h1 {{ margin: 0; font-size: 24px; }}
+        a {{ color: #93c5fd; }}
+        .hint {{ color: #94a3b8; font-size: 14px; }}
+        .card {{ background: #111827; border: 1px solid #334155; border-radius: 14px; padding: 18px; margin: 0 0 16px; }}
+        .card.error {{ border-color: #ef4444; }}
+        .meta {{ display: flex; flex-wrap: wrap; gap: 10px; color: #cbd5e1; margin-bottom: 14px; }}
+        .meta strong {{ color: #f8fafc; }}
+        h3 {{ margin: 16px 0 8px; font-size: 14px; color: #bfdbfe; }}
+        pre {{ white-space: pre-wrap; word-break: break-word; background: #020617; border-radius: 10px; padding: 12px; line-height: 1.45; color: #e2e8f0; }}
+        .error {{ color: #fecaca; background: #7f1d1d; padding: 10px; border-radius: 8px; }}
+        .empty {{ color: #cbd5e1; }}
+      </style>
+    </head>
+    <body>
+      <header>
+        <div>
+          <h1>LLM Debug</h1>
+          <div class="hint">Публичная страница без авторизации. Автообновление каждые 5 секунд. Хранятся последние 100 вызовов в памяти backend.</div>
+        </div>
+        <a href="/debug/llm">обновить</a>
+      </header>
+      {body}
+    </body>
+    </html>
+    '''
 
 redis_client = redis_from_url(settings.redis_url, decode_responses=True)
 
@@ -680,7 +769,7 @@ async def suggest_reply(
         conv_result = await db.execute(select(Conversation).where(Conversation.id == payload.conversation_id))
         conv = conv_result.scalar_one_or_none()
         if conv and conv.client_id:
-            context = await build_client_context(db, conv.client_id)
+            context = await build_conversation_context(db, conv)
     suggestions = await generator_service.suggest_replies(payload.text, analysis, context)
 
     response = SuggestReplyResponse(analysis=analysis, suggestions=suggestions)
@@ -707,13 +796,21 @@ async def improve_draft(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ImproveDraftResponse:
-    cache_key = f'improve:{hash(payload.text)}'
+    cache_key = f'improve:{hash((payload.text, payload.conversation_id))}'
     cached = await redis_client.get(cache_key)
     if cached:
         return ImproveDraftResponse.model_validate_json(cached)
 
     analysis = await nlp_service.analyze(payload.text)
-    improved = await generator_service.improve_draft(payload.text, analysis)
+    context = ''
+    if user.role == 'client':
+        context = await build_client_context(db, user.id)
+    elif user.role == 'worker' and payload.conversation_id:
+        conv_result = await db.execute(select(Conversation).where(Conversation.id == payload.conversation_id))
+        conv = conv_result.scalar_one_or_none()
+        if conv and conv.client_id:
+            context = await build_conversation_context(db, conv)
+    improved = await generator_service.improve_draft(payload.text, analysis, context)
     diff = nlp_service.make_diff(payload.text, improved)
 
     response = ImproveDraftResponse(analysis=analysis, improved_text=improved, diff=diff)
