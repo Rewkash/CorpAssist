@@ -301,7 +301,7 @@ function ChatScreen() {
       }
       try {
         const res = await suggestConversationTags(token, conversationId)
-        setSuggestedTags(res.tags)
+        setSuggestedTags(Array.isArray(res.tags) ? res.tags : [])
       } catch {
         setSuggestedTags([])
       }

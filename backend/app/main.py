@@ -46,7 +46,11 @@ async def build_client_context(db: AsyncSession, client_id: int) -> str:
         .limit(20)
     )
     items = result.scalars().all()
-    return ' '.join([item.text for item in items])
+    result_lines: list[str] = []
+    for item in reversed(items):
+        role = 'Клиент' if item.sender_id == client_id else 'Оператор'
+        result_lines.append(f'{role}: {item.text}')
+    return '\n'.join(result_lines)
 
 
 @asynccontextmanager
@@ -59,6 +63,7 @@ async def lifespan(_: FastAPI):
         await conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'open'"))
         await conn.execute(text('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ NULL'))
         await conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT '[]'"))
+        await conn.execute(text('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS tags_generated BOOLEAN DEFAULT FALSE'))
         await conn.execute(text('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS priority_at TIMESTAMPTZ NULL'))
         await conn.execute(text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'sent'"))
         await conn.execute(text('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ NULL'))
@@ -559,13 +564,20 @@ async def suggest_conversation_tags(
         raise HTTPException(status_code=404, detail='Диалог не найден')
     if user.role == 'worker' and conversation.worker_id not in (None, user.id):
         raise HTTPException(status_code=403, detail='Нет доступа к диалогу')
+    if conversation.tags_generated:
+        return {'tags': [], 'applied_tags': []}
 
     msg_result = await db.execute(
         select(ChatMessage).where(ChatMessage.conversation_id == conversation_id).order_by(ChatMessage.created_at.asc())
     )
     messages = msg_result.scalars().all()
     if not messages:
-        return {'tags': []}
+        return {'tags': [], 'applied_tags': []}
+
+    client_messages = [m for m in messages if m.sender_id == conversation.client_id]
+    client_text_len = sum(len((m.text or '').strip()) for m in client_messages)
+    if len(client_messages) < 2 or client_text_len < 50:
+        return {'tags': [], 'applied_tags': []}
 
     full_text = '\n'.join(
         [
@@ -574,9 +586,29 @@ async def suggest_conversation_tags(
         ]
     )[:8000]
 
-    ai_tags = await generator_service.suggest_tags(full_text)
-    if ai_tags:
-        return {'tags': ai_tags}
+    ai_result = await generator_service.suggest_tags(full_text)
+    auto_tags = [tag.strip() for tag in ai_result.get('auto_tags', []) if tag.strip()]
+    suggested_tags = [tag.strip() for tag in ai_result.get('suggested_tags', []) if tag.strip()]
+    priority = bool(ai_result.get('priority', False))
+
+    applied_tags: list[str] = []
+    for tag in auto_tags:
+        if tag not in applied_tags:
+            applied_tags.append(tag)
+    if priority and 'Срочно' not in applied_tags:
+        applied_tags.append('Срочно')
+
+    if applied_tags:
+        conversation.tags = json.dumps(applied_tags, ensure_ascii=False)
+        conversation.tags_generated = True
+        if 'Срочно' in applied_tags and conversation.priority_at is None:
+            await db.execute(text('UPDATE conversations SET priority_at = NOW() WHERE id = :id'), {'id': conversation.id})
+        if 'Срочно' not in applied_tags:
+            conversation.priority_at = None
+        await db.commit()
+        await db.refresh(conversation)
+        await push_conversations_snapshot(db, conversation)
+        return {'tags': suggested_tags, 'applied_tags': applied_tags}
 
     analysis = await nlp_service.analyze(full_text)
     tags: list[str] = []
@@ -586,7 +618,14 @@ async def suggest_conversation_tags(
             tags.append(topic_clean)
     if analysis.sentiment == 'tense' and 'Приоритет' not in tags:
         tags.insert(0, 'Приоритет')
-    return {'tags': tags}
+    applied_fallback = tags[:2]
+    if applied_fallback:
+        conversation.tags = json.dumps(applied_fallback, ensure_ascii=False)
+        conversation.tags_generated = True
+        await db.commit()
+        await db.refresh(conversation)
+        await push_conversations_snapshot(db, conversation)
+    return {'tags': [], 'applied_tags': applied_fallback}
 
 
 @app.post('/chat/conversations/tags', response_model=ConversationItem)
