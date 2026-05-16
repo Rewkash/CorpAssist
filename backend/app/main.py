@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import from_url as redis_from_url
@@ -269,8 +270,15 @@ async def push_conversations_snapshot(db: AsyncSession, conversation: Conversati
 
 
 @app.get('/health')
-async def health() -> dict[str, str]:
-    return {'status': 'ok'}
+async def health() -> dict[str, Any]:
+    ollama_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f'{settings.ollama_base_url}/api/tags')
+            ollama_ok = resp.status_code == 200
+    except Exception:
+        pass
+    return {'status': 'ok', 'ollama': 'connected' if ollama_ok else 'unavailable'}
 
 
 @app.post('/auth/register', response_model=TokenResponse)
@@ -560,6 +568,11 @@ async def suggest_conversation_tags(
         return {'tags': []}
 
     full_text = ' '.join([m.text for m in messages])[:8000]
+
+    ai_tags = await generator_service.suggest_tags(full_text)
+    if ai_tags:
+        return {'tags': ai_tags}
+
     analysis = await nlp_service.analyze(full_text)
     tags: list[str] = []
     for topic in analysis.topics[:5]:
@@ -762,6 +775,7 @@ async def assist_ws(websocket: WebSocket):
 
             analysis = await nlp_service.analyze(text)
             await websocket.send_json({'type': 'analysis', 'payload': analysis.model_dump()})
+            await websocket.send_json({'type': 'generating', 'message': 'Генерация ответа нейросетью...'})
 
             if mode == 'reply':
                 context = ''

@@ -85,6 +85,7 @@ function ChatScreen() {
   const [busy, setBusy] = useState(false)
   const [assistBusy, setAssistBusy] = useState(false)
   const [assistHint, setAssistHint] = useState('')
+  const [generatingStatus, setGeneratingStatus] = useState('')
   const [myId, setMyId] = useState<number | null>(null)
   const messagesRef = useRef<HTMLDivElement | null>(null)
   const prevConversationRef = useRef<number | null>(null)
@@ -500,6 +501,7 @@ function ChatScreen() {
       return
     }
     setAssistBusy(true)
+    setGeneratingStatus('Генерация ответа нейросетью...')
     setError('')
     try {
       const result = await suggestReply(token, sourceText, conversationId ?? undefined)
@@ -509,12 +511,14 @@ function ChatScreen() {
       setError(err instanceof Error ? err.message : 'Не удалось подсказать ответ')
     } finally {
       setAssistBusy(false)
+      setGeneratingStatus('')
     }
   }
 
   const onImprove = async () => {
     if (!token || text.trim().length < 3) return
     setAssistBusy(true)
+    setGeneratingStatus('Генерация ответа нейросетью...')
     setError('')
     try {
       const result = await improveDraft(token, text.trim())
@@ -524,6 +528,7 @@ function ChatScreen() {
       setError(err instanceof Error ? err.message : 'Не удалось улучшить текст')
     } finally {
       setAssistBusy(false)
+      setGeneratingStatus('')
     }
   }
 
@@ -829,6 +834,7 @@ function ChatScreen() {
             <div className="aiRow">
               <button onClick={onSuggest} disabled={assistBusy} className="btn ghostAccent">Подсказать ответ</button>
               <button onClick={onImprove} disabled={assistBusy} className="btn">Улучшить текст</button>
+              {assistBusy && <span className="text-sm text-cyan-300">{generatingStatus || 'Генерация...'}</span>}
             </div>
             <div className="textareaWrap">
               <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
