@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -17,7 +19,18 @@ from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine, get_db
 from app.deps import get_current_user, require_role
 from app.generator import generator_service, get_llm_debug_log
-from app.models import ChatMessage, Conversation, MessageHistory, User
+from app import knowledge as knowledge_service
+from app import semantic_cache
+from app.models import (
+    ChatMessage,
+    ClientProfile,
+    Conversation,
+    KnowledgeChunk,
+    KnowledgeEntry,
+    MessageHistory,
+    SemanticCacheEntry,
+    User,
+)
 from app.nlp import nlp_service
 from app.schemas import (
     AssignWorkerRequest,
@@ -26,6 +39,12 @@ from app.schemas import (
     HistoryItem,
     ImproveDraftRequest,
     ImproveDraftResponse,
+    KnowledgeEntryCreate,
+    KnowledgeEntryItem,
+    KnowledgeEntryUpdate,
+    KnowledgeHitItem,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
     LoginRequest,
     MeResponse,
     MarkReadRequest,
@@ -36,6 +55,8 @@ from app.schemas import (
     SuggestReplyResponse,
     TokenResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def build_client_context(db: AsyncSession, client_id: int) -> str:
@@ -69,6 +90,82 @@ async def build_conversation_context(db: AsyncSession, conversation: Conversatio
     return '\n'.join(result_lines)
 
 
+async def build_knowledge_block(
+    db: AsyncSession,
+    *,
+    query: str,
+    client_id: int | None,
+    source_types: list[str] | None = None,
+) -> str:
+    """Тонкая обёртка: поиск + форматирование для system-prompt."""
+    try:
+        hits = await knowledge_service.search(
+            db,
+            query=query,
+            client_id=client_id,
+            source_types=source_types,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception('RAG search failed, проигнорировано')
+        return ''
+    return knowledge_service.build_prompt_block(hits)
+
+
+async def _index_chat_message_background(message_id: int, conversation_id: int, client_id: int, text_value: str) -> None:
+    """Фоновая индексация одного сообщения в knowledge_chunks."""
+    cleaned = (text_value or '').strip()
+    if len(cleaned) < 30:
+        return
+    async with AsyncSessionLocal() as db:
+        try:
+            await knowledge_service.index_text(
+                db,
+                text=cleaned,
+                source_type=knowledge_service.SOURCE_CHAT,
+                source_id=message_id,
+                scope=knowledge_service.SCOPE_CLIENT,
+                client_id=client_id,
+                meta={'conversation_id': conversation_id},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception('Не удалось проиндексировать сообщение %s в knowledge_chunks', message_id)
+
+
+def schedule_message_indexing(message: ChatMessage, conversation: Conversation) -> None:
+    if conversation.client_id is None:
+        return
+    asyncio.create_task(
+        _index_chat_message_background(
+            message_id=message.id,
+            conversation_id=conversation.id,
+            client_id=conversation.client_id,
+            text_value=message.text,
+        )
+    )
+
+
+async def _reindex_knowledge_entry(entry: KnowledgeEntry) -> None:
+    async with AsyncSessionLocal() as db:
+        try:
+            await knowledge_service.delete_chunks(
+                db, source_type=knowledge_service.SOURCE_KB, source_id=entry.id
+            )
+            body = (entry.body or '').strip()
+            if not body:
+                return
+            await knowledge_service.index_text(
+                db,
+                text=body,
+                source_type=knowledge_service.SOURCE_KB,
+                source_id=entry.id,
+                scope=entry.scope,
+                client_id=entry.client_id,
+                meta={'title': entry.title, 'tags': entry.tags},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception('Не удалось проиндексировать KnowledgeEntry %s', entry.id)
+
+
 def ensure_llm_ready() -> None:
     try:
         generator_service.ensure_ready()
@@ -79,6 +176,7 @@ def ensure_llm_ready() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'client'"))
         await conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS assigned_worker_id INTEGER'))
@@ -95,6 +193,18 @@ async def lifespan(_: FastAPI):
         await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_conversations_priority_at ON conversations (priority_at)'))
         await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_users_role ON users (role)'))
         await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_users_assigned_worker_id ON users (assigned_worker_id)'))
+        await conn.execute(
+            text(
+                'CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_embedding '
+                'ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)'
+            )
+        )
+        await conn.execute(
+            text(
+                'CREATE INDEX IF NOT EXISTS ix_semantic_cache_embedding '
+                'ON semantic_cache_entries USING hnsw (query_embedding vector_cosine_ops)'
+            )
+        )
     yield
 
 
@@ -643,6 +753,7 @@ async def send_chat_message(
     db.add(message)
     await db.commit()
     await db.refresh(message)
+    schedule_message_indexing(message, conversation)
     item = ChatMessageItem.model_validate(message)
     await chat_socket_hub.send_to_conversation(
         conversation.id,
@@ -749,7 +860,14 @@ async def suggest_conversation_tags(
         ]
     )[:8000]
 
-    ai_result = await generator_service.suggest_tags(full_text)
+    knowledge_block = await build_knowledge_block(
+        db,
+        query=full_text[-2000:],
+        client_id=conversation.client_id,
+        source_types=[knowledge_service.SOURCE_KB],
+    )
+
+    ai_result = await generator_service.suggest_tags(full_text, knowledge_block=knowledge_block)
     auto_tags = [tag.strip() for tag in ai_result.get('auto_tags', []) if tag.strip()]
     suggested_tags = [tag.strip() for tag in ai_result.get('suggested_tags', []) if tag.strip()]
     priority = bool(ai_result.get('priority', False))
@@ -824,6 +942,14 @@ async def set_conversation_tags(
     return items[0]
 
 
+def _resolve_client_id(user: User, conversation: Conversation | None) -> int | None:
+    if user.role == 'client':
+        return user.id
+    if conversation and conversation.client_id:
+        return conversation.client_id
+    return None
+
+
 @app.post('/assist/reply', response_model=SuggestReplyResponse)
 async def suggest_reply(
     payload: SuggestReplyRequest,
@@ -833,6 +959,7 @@ async def suggest_reply(
     ensure_llm_ready()
     analysis = await nlp_service.analyze(payload.text)
     context = ''
+    conv: Conversation | None = None
     if user.role == 'client':
         context = await build_client_context(db, user.id)
     elif user.role == 'worker' and payload.conversation_id:
@@ -840,9 +967,34 @@ async def suggest_reply(
         conv = conv_result.scalar_one_or_none()
         if conv and conv.client_id:
             context = await build_conversation_context(db, conv)
-    suggestions = await generator_service.suggest_replies(payload.text, analysis, context)
+
+    target_client_id = _resolve_client_id(user, conv)
+    scope_key = f'client:{target_client_id}' if target_client_id else 'global'
+
+    cached = await semantic_cache.lookup(db, mode='suggest_reply', query=payload.text, scope_key=scope_key)
+    if cached and isinstance(cached, dict) and cached.get('suggestions'):
+        try:
+            return SuggestReplyResponse(analysis=analysis, suggestions=list(cached['suggestions']))
+        except Exception:  # noqa: BLE001
+            logger.exception('Семантический кэш: непригодный ответ, пересчитываю')
+
+    knowledge_block = await build_knowledge_block(
+        db, query=payload.text, client_id=target_client_id
+    )
+
+    suggestions = await generator_service.suggest_replies(
+        payload.text, analysis, context, knowledge_block=knowledge_block
+    )
 
     response = SuggestReplyResponse(analysis=analysis, suggestions=suggestions)
+
+    await semantic_cache.store(
+        db,
+        mode='suggest_reply',
+        query=payload.text,
+        response={'suggestions': suggestions},
+        scope_key=scope_key,
+    )
 
     db.add(
         MessageHistory(
@@ -868,6 +1020,7 @@ async def improve_draft(
     ensure_llm_ready()
     analysis = await nlp_service.analyze(payload.text)
     context = ''
+    conv: Conversation | None = None
     if user.role == 'client':
         context = await build_client_context(db, user.id)
     elif user.role == 'worker' and payload.conversation_id:
@@ -875,7 +1028,15 @@ async def improve_draft(
         conv = conv_result.scalar_one_or_none()
         if conv and conv.client_id:
             context = await build_conversation_context(db, conv)
-    improved = await generator_service.improve_draft(payload.text, analysis, context)
+
+    target_client_id = _resolve_client_id(user, conv)
+    knowledge_block = await build_knowledge_block(
+        db, query=payload.text, client_id=target_client_id
+    )
+
+    improved = await generator_service.improve_draft(
+        payload.text, analysis, context, knowledge_block=knowledge_block
+    )
     diff = nlp_service.make_diff(payload.text, improved)
 
     response = ImproveDraftResponse(analysis=analysis, improved_text=improved, diff=diff)
@@ -893,6 +1054,167 @@ async def improve_draft(
     )
     await db.commit()
     return response
+
+
+@app.get('/knowledge', response_model=list[KnowledgeEntryItem])
+async def list_knowledge_entries(
+    user: User = Depends(require_role('worker', 'admin')),
+    db: AsyncSession = Depends(get_db),
+) -> list[KnowledgeEntryItem]:
+    result = await db.execute(select(KnowledgeEntry).order_by(KnowledgeEntry.created_at.desc()).limit(200))
+    items: list[KnowledgeEntryItem] = []
+    for entry in result.scalars().all():
+        try:
+            tags = json.loads(entry.tags) if entry.tags else []
+            if not isinstance(tags, list):
+                tags = []
+        except json.JSONDecodeError:
+            tags = []
+        items.append(
+            KnowledgeEntryItem(
+                id=entry.id,
+                title=entry.title,
+                body=entry.body,
+                tags=[str(t) for t in tags],
+                scope=entry.scope,
+                client_id=entry.client_id,
+                created_by=entry.created_by,
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
+            )
+        )
+    return items
+
+
+@app.post('/knowledge', response_model=KnowledgeEntryItem)
+async def create_knowledge_entry(
+    payload: KnowledgeEntryCreate,
+    user: User = Depends(require_role('worker', 'admin')),
+    db: AsyncSession = Depends(get_db),
+) -> KnowledgeEntryItem:
+    if payload.scope == 'client' and payload.client_id is None:
+        raise HTTPException(status_code=400, detail='client_id обязателен для scope=client')
+    entry = KnowledgeEntry(
+        title=payload.title.strip(),
+        body=payload.body.strip(),
+        tags=json.dumps(payload.tags, ensure_ascii=False),
+        scope=payload.scope,
+        client_id=payload.client_id if payload.scope == 'client' else None,
+        created_by=user.id,
+    )
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    asyncio.create_task(_reindex_knowledge_entry(entry))
+    return KnowledgeEntryItem(
+        id=entry.id,
+        title=entry.title,
+        body=entry.body,
+        tags=payload.tags,
+        scope=entry.scope,
+        client_id=entry.client_id,
+        created_by=entry.created_by,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+    )
+
+
+@app.put('/knowledge/{entry_id}', response_model=KnowledgeEntryItem)
+async def update_knowledge_entry(
+    entry_id: int,
+    payload: KnowledgeEntryUpdate,
+    user: User = Depends(require_role('worker', 'admin')),
+    db: AsyncSession = Depends(get_db),
+) -> KnowledgeEntryItem:
+    result = await db.execute(select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail='Запись базы знаний не найдена')
+
+    if payload.title is not None:
+        entry.title = payload.title.strip()
+    if payload.body is not None:
+        entry.body = payload.body.strip()
+    if payload.tags is not None:
+        entry.tags = json.dumps(payload.tags, ensure_ascii=False)
+    if payload.scope is not None:
+        entry.scope = payload.scope
+    if payload.client_id is not None:
+        entry.client_id = payload.client_id
+    if entry.scope == 'global':
+        entry.client_id = None
+    elif entry.scope == 'client' and entry.client_id is None:
+        raise HTTPException(status_code=400, detail='client_id обязателен для scope=client')
+
+    await db.commit()
+    await db.refresh(entry)
+    asyncio.create_task(_reindex_knowledge_entry(entry))
+
+    try:
+        tags = json.loads(entry.tags) if entry.tags else []
+        if not isinstance(tags, list):
+            tags = []
+    except json.JSONDecodeError:
+        tags = []
+    return KnowledgeEntryItem(
+        id=entry.id,
+        title=entry.title,
+        body=entry.body,
+        tags=[str(t) for t in tags],
+        scope=entry.scope,
+        client_id=entry.client_id,
+        created_by=entry.created_by,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+    )
+
+
+@app.delete('/knowledge/{entry_id}')
+async def delete_knowledge_entry(
+    entry_id: int,
+    user: User = Depends(require_role('worker', 'admin')),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    result = await db.execute(select(KnowledgeEntry).where(KnowledgeEntry.id == entry_id))
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail='Запись базы знаний не найдена')
+    await knowledge_service.delete_chunks(
+        db, source_type=knowledge_service.SOURCE_KB, source_id=entry.id
+    )
+    await db.delete(entry)
+    await db.commit()
+    return {'status': 'deleted'}
+
+
+@app.post('/knowledge/search', response_model=KnowledgeSearchResponse)
+async def search_knowledge(
+    payload: KnowledgeSearchRequest,
+    user: User = Depends(require_role('worker', 'admin')),
+    db: AsyncSession = Depends(get_db),
+) -> KnowledgeSearchResponse:
+    hits = await knowledge_service.search(
+        db,
+        query=payload.query,
+        client_id=payload.client_id,
+        top_k=payload.top_k,
+        min_score=payload.min_score,
+    )
+    return KnowledgeSearchResponse(
+        hits=[
+            KnowledgeHitItem(
+                chunk_id=h.chunk_id,
+                text=h.text,
+                score=h.score,
+                source_type=h.source_type,
+                source_id=h.source_id,
+                scope=h.scope,
+                client_id=h.client_id,
+                meta=h.meta,
+            )
+            for h in hits
+        ]
+    )
 
 
 @app.get('/history', response_model=list[HistoryItem])

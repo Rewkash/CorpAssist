@@ -313,18 +313,32 @@ class BusinessTextGenerator:
     async def list_models(self) -> list[str]:
         return await self._llm.list_models()
 
-    async def suggest_replies(self, incoming_text: str, analysis: AnalysisResult, context: str = '') -> list[str]:
+    async def suggest_replies(
+        self,
+        incoming_text: str,
+        analysis: AnalysisResult,
+        context: str = '',
+        knowledge_block: str = '',
+    ) -> list[str]:
         context_block = ''
         if context.strip():
             short_context = textwrap.shorten(context, width=300, placeholder='...')
             context_block = f'Контекст предыдущего общения:\n{short_context}\n\n'
+
+        knowledge_prefix = ''
+        if knowledge_block.strip():
+            knowledge_prefix = f'{knowledge_block.strip()}\n\n'
+
+        system_prompt = SYSTEM_PROMPT_REPLY
+        if knowledge_prefix:
+            system_prompt = f'{SYSTEM_PROMPT_REPLY}\n\n{knowledge_prefix.strip()}'
 
         user_prompt = f'{context_block}Последнее сообщение клиента:\n{incoming_text.strip()}'
 
         for _ in range(2):
             try:
                 raw = await self._llm.generate(
-                    system_prompt=SYSTEM_PROMPT_REPLY,
+                    system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     temperature=0.7,
                     max_tokens=600,
@@ -339,18 +353,28 @@ class BusinessTextGenerator:
 
         return self._fallback_replies(incoming_text, analysis, context)
 
-    async def improve_draft(self, draft: str, analysis: AnalysisResult, context: str = '') -> str:
+    async def improve_draft(
+        self,
+        draft: str,
+        analysis: AnalysisResult,
+        context: str = '',
+        knowledge_block: str = '',
+    ) -> str:
         context_block = ''
         if context.strip():
             short_context = textwrap.shorten(context, width=3000, placeholder='...')
             context_block = f'Контекст диалога только для понимания темы. Не переписывай его и не отвечай на него:\n{short_context}\n\n'
+
+        system_prompt = SYSTEM_PROMPT_IMPROVE
+        if knowledge_block.strip():
+            system_prompt = f'{SYSTEM_PROMPT_IMPROVE}\n\n{knowledge_block.strip()}'
 
         user_prompt = f'{context_block}Черновик оператора для улучшения:\n\n{draft.strip()}'
 
         for attempt in range(2):
             try:
                 improved = await self._llm.generate(
-                    system_prompt=SYSTEM_PROMPT_IMPROVE,
+                    system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     temperature=0.3,
                     max_tokens=512,
@@ -368,8 +392,11 @@ class BusinessTextGenerator:
 
         return self._fallback_improve(draft)
 
-    async def suggest_tags(self, conversation_text: str) -> dict[str, Any]:
-        user_prompt = f'Текст диалога:\n\n{conversation_text[:4000]}'
+    async def suggest_tags(self, conversation_text: str, knowledge_block: str = '') -> dict[str, Any]:
+        knowledge_prefix = ''
+        if knowledge_block.strip():
+            knowledge_prefix = f'\n\n{knowledge_block.strip()}'
+        user_prompt = f'Текст диалога:\n\n{conversation_text[:4000]}{knowledge_prefix}'
         schema = {
             'type': 'object',
             'properties': {

@@ -122,3 +122,56 @@ class HistoryItem(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class KnowledgeEntryCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1)
+    tags: list[str] = []
+    scope: Literal['global', 'client'] = 'global'
+    client_id: int | None = None
+
+
+class KnowledgeEntryUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    body: str | None = Field(default=None, min_length=1)
+    tags: list[str] | None = None
+    scope: Literal['global', 'client'] | None = None
+    client_id: int | None = None
+
+
+class KnowledgeEntryItem(BaseModel):
+    id: int
+    title: str
+    body: str
+    tags: list[str]
+    scope: str
+    client_id: int | None = None
+    created_by: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class KnowledgeHitItem(BaseModel):
+    chunk_id: int
+    text: str
+    score: float
+    source_type: str
+    source_id: int | None = None
+    scope: str
+    client_id: int | None = None
+    meta: dict
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    client_id: int | None = None
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    min_score: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class KnowledgeSearchResponse(BaseModel):
+    hits: list[KnowledgeHitItem]
