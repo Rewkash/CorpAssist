@@ -189,6 +189,8 @@ async def llm_debug_page() -> str:
           <form id="model-form">
             <select id="model-select" name="model">{model_options}</select>
             <button id="model-submit" type="submit">Сменить модель</button>
+            <button id="model-unload" type="button">Выгрузить</button>
+            <button id="model-stop" type="button">Остановить загрузку</button>
           </form>
           <div id="model-status" class="hint">Текущая модель: {escape(current_model)}</div>
           {'<div class="error">' + escape(model_error) + '</div>' if model_error else ''}
@@ -200,13 +202,21 @@ async def llm_debug_page() -> str:
         const form = document.getElementById('model-form');
         const select = document.getElementById('model-select');
         const button = document.getElementById('model-submit');
+        const unloadButton = document.getElementById('model-unload');
+        const stopButton = document.getElementById('model-stop');
         const statusEl = document.getElementById('model-status');
+
+        function setControlsDisabled(disabled) {{
+          button.disabled = disabled;
+          unloadButton.disabled = disabled;
+          stopButton.disabled = disabled;
+          select.disabled = disabled;
+        }}
 
         form.addEventListener('submit', async (event) => {{
           event.preventDefault();
           const selectedModel = select.value;
-          button.disabled = true;
-          select.disabled = true;
+          setControlsDisabled(true);
           button.textContent = 'Модель загружается...';
           statusEl.textContent = `Выгружается старая модель и загружается ${{selectedModel}}...`;
           const response = await fetch('/debug/llm/model', {{
@@ -217,14 +227,33 @@ async def llm_debug_page() -> str:
           const data = await response.json();
           if (!response.ok) {{
             statusEl.textContent = data.status || 'Ошибка смены модели';
-            button.disabled = false;
-            select.disabled = false;
+            setControlsDisabled(false);
+            button.textContent = 'Сменить модель';
             return;
           }}
           statusEl.textContent = data.status || `Текущая модель: ${{data.model}}`;
           if (data.model) select.value = data.model;
-          button.disabled = false;
-          select.disabled = false;
+          setControlsDisabled(false);
+          button.textContent = 'Сменить модель';
+        }});
+
+        unloadButton.addEventListener('click', async () => {{
+          setControlsDisabled(true);
+          statusEl.textContent = `Выгружается модель ${{select.value}}...`;
+          const response = await fetch('/debug/llm/unload', {{ method: 'POST' }});
+          const data = await response.json();
+          statusEl.textContent = data.status || 'Модель выгружена';
+          setControlsDisabled(false);
+          button.textContent = 'Сменить модель';
+        }});
+
+        stopButton.addEventListener('click', async () => {{
+          setControlsDisabled(true);
+          statusEl.textContent = 'Останавливается загрузка и очищается выбранная модель...';
+          const response = await fetch('/debug/llm/stop-loading', {{ method: 'POST' }});
+          const data = await response.json();
+          statusEl.textContent = data.status || 'Загрузка остановлена';
+          setControlsDisabled(false);
           button.textContent = 'Сменить модель';
         }});
       </script>
@@ -247,6 +276,26 @@ async def set_llm_debug_model(payload: dict[str, str]) -> JSONResponse:
         await generator_service.switch_model(model)
     except Exception as exc:
         return JSONResponse({'ok': False, 'status': f'Не удалось загрузить модель {model}: {exc!r}'}, status_code=500)
+    return JSONResponse({'ok': True, 'model': generator_service.model, 'status': generator_service.model_status})
+
+
+@app.post('/debug/llm/unload', include_in_schema=False)
+async def unload_llm_debug_model() -> JSONResponse:
+    if generator_service.model_loading:
+        return JSONResponse({'ok': False, 'status': generator_service.model_status}, status_code=409)
+    try:
+        await generator_service.unload_current_model()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'status': f'Не удалось выгрузить модель: {exc!r}'}, status_code=500)
+    return JSONResponse({'ok': True, 'model': generator_service.model, 'status': generator_service.model_status})
+
+
+@app.post('/debug/llm/stop-loading', include_in_schema=False)
+async def stop_llm_loading() -> JSONResponse:
+    try:
+        await generator_service.cancel_loading_and_clear()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'status': f'Не удалось остановить загрузку: {exc!r}'}, status_code=500)
     return JSONResponse({'ok': True, 'model': generator_service.model, 'status': generator_service.model_status})
 
 @dataclass(frozen=True)

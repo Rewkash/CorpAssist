@@ -114,6 +114,7 @@ function ChatScreen() {
   const [mobileMode, setMobileMode] = useState<'list' | 'chat' | 'info'>('chat')
   const [viewportWidth, setViewportWidth] = useState<number>(typeof window !== 'undefined' ? window.innerWidth : 1440)
   const [suggestedTags, setSuggestedTags] = useState<string[]>([])
+  const [replySuggestions, setReplySuggestions] = useState<string[]>([])
   const [manualTag, setManualTag] = useState('')
   const [showTagDropdown, setShowTagDropdown] = useState(false)
   const tagDropdownRef = useRef<HTMLDivElement | null>(null)
@@ -473,6 +474,7 @@ function ChatScreen() {
       setMessages((prev) => [...prev, item])
       clearUnreadDividerSmooth()
       setText('')
+      setReplySuggestions([])
       const items = await getMessages(token, targetConversationId)
       forceScrollOnNextRenderRef.current = true
       setMessages(items)
@@ -505,8 +507,8 @@ function ChatScreen() {
     setError('')
     try {
       const result = await suggestReply(token, sourceText, conversationId ?? undefined)
-      if (result.suggestions.length > 0) setText(result.suggestions[0])
-      setAssistHint('Готово: подставили вариант ответа в поле ввода.')
+      setReplySuggestions(result.suggestions)
+      setAssistHint(result.suggestions.length > 0 ? 'Выберите подходящий вариант ответа.' : 'Нейросеть не вернула варианты ответа.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось подсказать ответ')
     } finally {
@@ -523,6 +525,7 @@ function ChatScreen() {
     try {
       const result = await improveDraft(token, text.trim(), conversationId ?? undefined)
       setText(result.improved_text)
+      setReplySuggestions([])
       setAssistHint('Готово: текст стал более деловым и понятным.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось улучшить текст')
@@ -619,6 +622,7 @@ function ChatScreen() {
     setMessages([])
     setFirstUnreadId(null)
     setText('')
+    setReplySuggestions([])
     setError('')
     setAssistHint('Новый диалог будет создан после первого сообщения.')
   }
@@ -836,6 +840,30 @@ function ChatScreen() {
               <button onClick={onImprove} disabled={assistBusy} className="btn">Улучшить текст</button>
               {assistBusy && <span className="text-sm text-cyan-300">{generatingStatus || 'Генерация...'}</span>}
             </div>
+            {replySuggestions.length > 0 && (
+              <div className="replySuggestions">
+                <div className="replySuggestionsHead">
+                  <span>Варианты ответа</span>
+                  <button className="replySuggestionsClose" onClick={() => setReplySuggestions([])} aria-label="Скрыть варианты">×</button>
+                </div>
+                <div className="replySuggestionsGrid">
+                  {replySuggestions.map((suggestion, index) => (
+                    <button
+                      key={`${index}-${suggestion.slice(0, 24)}`}
+                      className="replySuggestionCard"
+                      onClick={() => {
+                        setText(suggestion)
+                        setReplySuggestions([])
+                        setAssistHint('Вариант подставлен в поле ввода.')
+                      }}
+                    >
+                      <span className="replySuggestionNum">{index + 1}</span>
+                      <span>{suggestion}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="textareaWrap">
               <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {

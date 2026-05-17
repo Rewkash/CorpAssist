@@ -2,8 +2,10 @@ import logging
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 import textwrap
+import re
 
 import httpx
 
@@ -12,6 +14,7 @@ from app.schemas import AnalysisResult
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_LOG: deque[dict[str, Any]] = deque(maxlen=100)
+RUNTIME_MODEL_FILE = Path(__file__).resolve().parents[1] / '.runtime_ollama_model'
 
 
 def get_llm_debug_log() -> list[dict[str, Any]]:
@@ -21,6 +24,7 @@ SYSTEM_PROMPT_REPLY = """\
 Ты помогаешь оператору поддержки составить ответ клиенту. Сгенерируй 3 варианта.
 Правила:
 - Пиши ТОЛЬКО на русском языке
+- Никогда не используй английские слова и фразы
 - Сразу пиши готовый текст, без рассуждений и вводных
 - Деловой стиль, вежливо, по существу
 - Каждый вариант - 2-4 предложения
@@ -110,6 +114,8 @@ MORALIZING_MARKERS = (
     'опишите вашу проблему более подробно',
 )
 INTRO_MARKERS = ('конечно', 'хорошо', 'давайте', 'вот', 'варианты')
+VARIANT_TITLE_RE = re.compile(r'^\s*(?:вариант\s*\d+\s*[:.)-]?|\d+\s*[.)-])\s*$', re.IGNORECASE)
+VARIANT_PREFIX_RE = re.compile(r'^\s*(?:вариант\s*\d+\s*[:.)-]?|\d+\s*[.)-])\s*', re.IGNORECASE)
 
 
 class OllamaClient:
@@ -261,10 +267,30 @@ class OllamaClient:
 
 class BusinessTextGenerator:
     def __init__(self) -> None:
-        self._llm = OllamaClient(settings.ollama_base_url, settings.ollama_model)
+        self._llm = OllamaClient(settings.ollama_base_url, self._load_saved_model())
         self._model_lock = asyncio.Lock()
         self._model_loading = False
         self._model_status = 'ready'
+        self._model_switch_task: asyncio.Task[Any] | None = None
+
+    @staticmethod
+    def _load_saved_model() -> str:
+        try:
+            saved_model = RUNTIME_MODEL_FILE.read_text(encoding='utf-8').strip()
+            return saved_model or settings.ollama_model
+        except OSError:
+            return settings.ollama_model
+
+    @staticmethod
+    def _save_model(model: str) -> None:
+        RUNTIME_MODEL_FILE.write_text(model.strip(), encoding='utf-8')
+
+    @staticmethod
+    def _clear_saved_model() -> None:
+        try:
+            RUNTIME_MODEL_FILE.unlink()
+        except OSError:
+            pass
 
     @property
     def model(self) -> str:
@@ -272,6 +298,19 @@ class BusinessTextGenerator:
 
     def set_model(self, model: str) -> None:
         self._llm.set_model(model)
+
+    async def unload_current_model(self) -> None:
+        async with self._model_lock:
+            current = self.model
+            if not current:
+                return
+            self._model_loading = True
+            self._model_status = f'Выгружается модель {current}'
+            try:
+                await self._llm.unload_model(current)
+                self._model_status = f'Модель {current} выгружена'
+            finally:
+                self._model_loading = False
 
     @property
     def model_loading(self) -> bool:
@@ -295,6 +334,7 @@ class BusinessTextGenerator:
 
             previous = self.model
             self._model_loading = True
+            self._model_switch_task = asyncio.current_task()
             self._model_status = f'Выгружается модель {previous}'
             try:
                 if previous:
@@ -302,13 +342,41 @@ class BusinessTextGenerator:
                 self._model_status = f'Загружается модель {target}'
                 self._llm.set_model(target)
                 await self._llm.preload_model(target)
+                self._save_model(target)
                 self._model_status = f'Модель {target} готова'
+            except asyncio.CancelledError:
+                self._model_status = f'Загрузка модели {target} остановлена'
+                raise
             except Exception:
                 self._llm.set_model(previous)
                 self._model_status = f'Не удалось загрузить модель {target}'
                 raise
             finally:
                 self._model_loading = False
+                self._model_switch_task = None
+
+    async def cancel_loading_and_clear(self) -> None:
+        current_task = self._model_switch_task
+        if self._model_loading and current_task and not current_task.done():
+            self._model_status = 'Останавливается загрузка модели...'
+            current_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(current_task), timeout=5.0)
+            except (asyncio.CancelledError, TimeoutError):
+                pass
+            except Exception:
+                pass
+
+        async with self._model_lock:
+            self._model_loading = False
+            current = self.model
+            if current:
+                try:
+                    await self._llm.unload_model(current)
+                except Exception:
+                    logger.exception('Failed to unload current model during cancel')
+            self._clear_saved_model()
+            self._model_status = 'Загрузка остановлена, модель выгружена, выбор очищен'
 
     async def list_models(self) -> list[str]:
         return await self._llm.list_models()
@@ -331,7 +399,7 @@ class BusinessTextGenerator:
                     mode='suggest_replies',
                 )
                 cleaned = self._strip_intro(raw)
-                variants = [self._strip_intro(v.strip()) for v in cleaned.split('---') if v.strip()]
+                variants = self._parse_reply_variants(cleaned)
                 if len(variants) >= 2:
                     return variants[:3]
             except Exception:
@@ -416,6 +484,21 @@ class BusinessTextGenerator:
                 continue
             break
         return '\n'.join(lines).strip() or text.strip()
+
+    @staticmethod
+    def _parse_reply_variants(text: str) -> list[str]:
+        normalized = re.sub(r'^\s*(?:вариант\s*\d+\s*[:.)-]?|\d+\s*[.)-])\s*$', '---', text, flags=re.IGNORECASE | re.MULTILINE)
+        variants: list[str] = []
+        for part in normalized.split('---'):
+            lines = [line.strip() for line in part.splitlines() if line.strip()]
+            while lines and VARIANT_TITLE_RE.match(lines[0]):
+                lines.pop(0)
+            cleaned = '\n'.join(lines).strip()
+            cleaned = VARIANT_PREFIX_RE.sub('', cleaned).strip()
+            cleaned = BusinessTextGenerator._strip_intro(cleaned)
+            if cleaned:
+                variants.append(cleaned)
+        return variants
 
     @staticmethod
     def _fallback_replies(incoming_text: str, analysis: AnalysisResult, context: str = '') -> list[str]:
