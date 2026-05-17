@@ -8,8 +8,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from redis.asyncio import from_url as redis_from_url
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,6 +69,13 @@ async def build_conversation_context(db: AsyncSession, conversation: Conversatio
     return '\n'.join(result_lines)
 
 
+def ensure_llm_ready() -> None:
+    try:
+        generator_service.ensure_ready()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
@@ -104,6 +110,19 @@ app.add_middleware(
 
 @app.get('/debug/llm', response_class=HTMLResponse, include_in_schema=False)
 async def llm_debug_page() -> str:
+    current_model = generator_service.model
+    model_error = ''
+    try:
+        available_models = await generator_service.list_models()
+    except Exception as exc:
+        available_models = [current_model]
+        model_error = f'Не удалось получить список моделей из Ollama: {exc!r}'
+    if current_model not in available_models:
+        available_models.insert(0, current_model)
+    model_options = ''.join(
+        f'<option value="{escape(model)}"{" selected" if model == current_model else ""}>{escape(model)}</option>'
+        for model in available_models
+    )
     items = get_llm_debug_log()
     cards = []
     for index, item in enumerate(items, start=1):
@@ -142,13 +161,15 @@ async def llm_debug_page() -> str:
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <meta http-equiv="refresh" content="5">
       <title>LLM Debug</title>
       <style>
         body {{ margin: 0; padding: 24px; background: #0f172a; color: #e5e7eb; font-family: Arial, sans-serif; }}
         header {{ display: flex; justify-content: space-between; gap: 16px; align-items: baseline; margin-bottom: 18px; }}
         h1 {{ margin: 0; font-size: 24px; }}
         a {{ color: #93c5fd; }}
+        form {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+        select {{ min-width: 260px; border: 1px solid #475569; border-radius: 8px; background: #020617; color: #e5e7eb; padding: 9px 10px; }}
+        button {{ border: 0; border-radius: 8px; background: #2563eb; color: white; padding: 9px 12px; cursor: pointer; }}
         .hint {{ color: #94a3b8; font-size: 14px; }}
         .card {{ background: #111827; border: 1px solid #334155; border-radius: 14px; padding: 18px; margin: 0 0 16px; }}
         .card.error {{ border-color: #ef4444; }}
@@ -164,17 +185,69 @@ async def llm_debug_page() -> str:
       <header>
         <div>
           <h1>LLM Debug</h1>
-          <div class="hint">Публичная страница без авторизации. Автообновление каждые 5 секунд. Хранятся последние 100 вызовов в памяти backend.</div>
+          <div class="hint">Публичная страница без авторизации. Хранятся последние 100 вызовов в памяти backend.</div>
+          <form id="model-form">
+            <select id="model-select" name="model">{model_options}</select>
+            <button id="model-submit" type="submit">Сменить модель</button>
+          </form>
+          <div id="model-status" class="hint">Текущая модель: {escape(current_model)}</div>
+          {'<div class="error">' + escape(model_error) + '</div>' if model_error else ''}
         </div>
         <a href="/debug/llm">обновить</a>
       </header>
       {body}
+      <script>
+        const form = document.getElementById('model-form');
+        const select = document.getElementById('model-select');
+        const button = document.getElementById('model-submit');
+        const statusEl = document.getElementById('model-status');
+
+        form.addEventListener('submit', async (event) => {{
+          event.preventDefault();
+          const selectedModel = select.value;
+          button.disabled = true;
+          select.disabled = true;
+          button.textContent = 'Модель загружается...';
+          statusEl.textContent = `Выгружается старая модель и загружается ${{selectedModel}}...`;
+          const response = await fetch('/debug/llm/model', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{ model: selectedModel }})
+          }});
+          const data = await response.json();
+          if (!response.ok) {{
+            statusEl.textContent = data.status || 'Ошибка смены модели';
+            button.disabled = false;
+            select.disabled = false;
+            return;
+          }}
+          statusEl.textContent = data.status || `Текущая модель: ${{data.model}}`;
+          if (data.model) select.value = data.model;
+          button.disabled = false;
+          select.disabled = false;
+          button.textContent = 'Сменить модель';
+        }});
+      </script>
     </body>
     </html>
     '''
 
-redis_client = redis_from_url(settings.redis_url, decode_responses=True)
 
+@app.post('/debug/llm/model', include_in_schema=False)
+async def set_llm_debug_model(payload: dict[str, str]) -> JSONResponse:
+    model = (payload.get('model') or '').strip()
+    if not model:
+        return JSONResponse({'ok': False, 'status': 'Модель не указана'}, status_code=400)
+    if generator_service.model_loading:
+        return JSONResponse({'ok': False, 'status': generator_service.model_status}, status_code=409)
+    if model == generator_service.model:
+        return JSONResponse({'ok': True, 'model': generator_service.model, 'status': generator_service.model_status})
+
+    try:
+        await generator_service.switch_model(model)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'status': f'Не удалось загрузить модель {model}: {exc!r}'}, status_code=500)
+    return JSONResponse({'ok': True, 'model': generator_service.model, 'status': generator_service.model_status})
 
 @dataclass(frozen=True)
 class ChatSocketClient:
@@ -647,6 +720,7 @@ async def suggest_conversation_tags(
     user: User = Depends(require_role('worker', 'admin')),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, list[str]]:
+    ensure_llm_ready()
     conv_result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
     conversation = conv_result.scalar_one_or_none()
     if not conversation:
@@ -756,11 +830,7 @@ async def suggest_reply(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SuggestReplyResponse:
-    cache_key = f'reply:{hash(payload.text)}'
-    cached = await redis_client.get(cache_key)
-    if cached:
-        return SuggestReplyResponse.model_validate_json(cached)
-
+    ensure_llm_ready()
     analysis = await nlp_service.analyze(payload.text)
     context = ''
     if user.role == 'client':
@@ -773,7 +843,6 @@ async def suggest_reply(
     suggestions = await generator_service.suggest_replies(payload.text, analysis, context)
 
     response = SuggestReplyResponse(analysis=analysis, suggestions=suggestions)
-    await redis_client.set(cache_key, response.model_dump_json(), ex=600)
 
     db.add(
         MessageHistory(
@@ -796,11 +865,7 @@ async def improve_draft(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ImproveDraftResponse:
-    cache_key = f'improve:{hash((payload.text, payload.conversation_id))}'
-    cached = await redis_client.get(cache_key)
-    if cached:
-        return ImproveDraftResponse.model_validate_json(cached)
-
+    ensure_llm_ready()
     analysis = await nlp_service.analyze(payload.text)
     context = ''
     if user.role == 'client':
@@ -814,7 +879,6 @@ async def improve_draft(
     diff = nlp_service.make_diff(payload.text, improved)
 
     response = ImproveDraftResponse(analysis=analysis, improved_text=improved, diff=diff)
-    await redis_client.set(cache_key, response.model_dump_json(), ex=600)
 
     db.add(
         MessageHistory(
@@ -910,6 +974,9 @@ async def assist_ws(websocket: WebSocket):
             conversation_id = payload.get('conversation_id')
             if len(text) < 5:
                 await websocket.send_json({'type': 'error', 'message': 'Введите более содержательный текст'})
+                continue
+            if generator_service.model_loading:
+                await websocket.send_json({'type': 'error', 'message': generator_service.model_status})
                 continue
 
             analysis = await nlp_service.analyze(text)

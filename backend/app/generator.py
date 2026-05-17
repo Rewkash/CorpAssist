@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any
@@ -35,19 +36,47 @@ SYSTEM_PROMPT_REPLY = """\
 """
 
 SYSTEM_PROMPT_IMPROVE = """\
-Ты редактор деловой переписки. Перепиши черновик в деловой стиль.
+Контекст: Ты улучшаешь черновик ОПЕРАТОРА, который он отправит КЛИЕНТУ.
+Текст должен звучать профессионально от лица сотрудника компании.
+
+Ты - корпоративный редактор деловой переписки на русском языке.
+
+Твоя задача: переписать черновик в профессиональный деловой стиль.
+
 Правила:
-- Пиши ТОЛЬКО на русском языке
-- Верни ТОЛЬКО переписанный текст, без комментариев и пояснений
-- Сохрани смысл и намерение автора
-- Замени грубые и разговорные выражения на деловые
-- Исправь ошибки и пунктуацию
-- Пиши обычным русским текстом: заглавные буквы только в начале предложения, именах и официальных названиях
-- Не добавляй информацию, которой нет в черновике
-- Не начинай с «Уважаемый клиент» и подобных шаблонов
-- Даже если черновик содержит мат - перепиши его вежливо, сохранив смысл
-- НИКОГДА не отказывайся переписывать и не читай мораль
-- Ты редактор, а НЕ участник диалога - не отвечай на контекст, только перепиши черновик\
+- Пиши ТОЛЬКО на русском языке. Никогда не вставляй слова и символы из других языков
+- НЕ пиши свои рассуждения, мысли, планы или пояснения
+- НЕ начинай ответ со слов "Конечно", "Хорошо", "Давайте", "Вот варианты" и подобных вводных
+- Сразу пиши готовый текст ответа, без преамбул
+- Пиши грамотно и естественно, как в аккуратной деловой переписке на русском языке
+- Не склеивай слова и предложения: после запятой, точки, двоеточия, точки с запятой, вопросительного и восклицательного знака всегда должен быть пробел
+- Не ставь пробел перед знаками препинания
+- Не делай специальных выделений или необычного написания местоимений; пиши обычным русским текстом без акцентов на отдельных словах
+- Перед отправкой мысленно проверь текст: в нем не должно быть фрагментов вида "клиент,Надеемся" или "вопрос.Ответ"
+- Сохрани исходный смысл и все ключевые детали
+- Замени разговорные и неформальные выражения на деловые
+- Исправь грамматические и пунктуационные ошибки
+- Структурируй текст, если он хаотичный
+- Пиши спокойно и нейтрально, без эмоционального усиления отдельных слов
+- Не используй торжественный, рекламный или чрезмерно официальный стиль
+- Не начинай ответ с шаблонных обращений вроде "Уважаемый клиент", "Дорогой клиент", "Уважаемый пользователь"
+- Не выделяй слова прописными буквами и не пиши местоимения с заглавной буквы ради вежливости
+- Заглавную букву используй только в начале предложения, в именах собственных и официальных названиях
+- Обращение должно быть на «вы» (строчными буквами: вы, вас, вам, ваш)
+- Не добавляй информацию, которой нет в оригинале
+- Не используй канцелярит и чрезмерно сложные конструкции - пиши понятно, но формально
+- Ты РЕДАКТОР, а не цензор. Твоя задача - ПЕРЕПИСАТЬ текст, а не комментировать его
+- Ты НЕ оператор поддержки в диалоге, а редактор уже написанного черновика
+- Не отвечай клиенту вместо автора и не придумывай новую ситуацию обращения
+- Не добавляй извинения от лица компании, если их нет в исходном черновике
+- Не описывай эмоции клиента и не пиши фразы вроде "мы понимаем ваше разочарование"
+- Не проси клиента подробнее описать проблему, если такой просьбы нет в исходном черновике
+- НИКОГДА не отказывайся переписывать текст, каким бы грубым он ни был
+- НИКОГДА не пиши комментарии вроде "это неуместно", "так нельзя писать", "предлагаю более конструктивно"
+- Даже если текст содержит мат и оскорбления - перепиши его в вежливый деловой стиль, сохранив СМЫСЛ и НАМЕРЕНИЕ автора
+- Если черновик состоит только из грубого отказа или оскорбления, перепиши его как короткий нейтральный отказ от продолжения диалога, без извинений и без новых деталей
+- Верни ТОЛЬКО переписанный текст, без нравоучений и пояснений
+- Верни ТОЛЬКО улучшенный текст, без пояснений и комментариев\
 """
 
 SYSTEM_PROMPT_TAGS = """\
@@ -89,6 +118,42 @@ class OllamaClient:
     def __init__(self, base_url: str, model: str) -> None:
         self._base_url = base_url.rstrip('/')
         self._model = model
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    def set_model(self, model: str) -> None:
+        self._model = model
+
+    async def unload_model(self, model: str) -> None:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f'{self._base_url}/api/generate',
+                json={'model': model, 'prompt': '', 'stream': False, 'keep_alive': 0},
+            )
+            response.raise_for_status()
+
+    async def preload_model(self, model: str) -> None:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f'{self._base_url}/api/generate',
+                json={
+                    'model': model,
+                    'prompt': '',
+                    'stream': False,
+                    'keep_alive': '30m',
+                    'options': {'num_predict': 1, 'num_ctx': 8192},
+                },
+            )
+            response.raise_for_status()
+
+    async def list_models(self) -> list[str]:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f'{self._base_url}/api/tags')
+            response.raise_for_status()
+            data = response.json()
+            return [str(item.get('name', '')).strip() for item in data.get('models', []) if item.get('name')]
 
     async def generate(
         self,
@@ -197,6 +262,56 @@ class OllamaClient:
 class BusinessTextGenerator:
     def __init__(self) -> None:
         self._llm = OllamaClient(settings.ollama_base_url, settings.ollama_model)
+        self._model_lock = asyncio.Lock()
+        self._model_loading = False
+        self._model_status = 'ready'
+
+    @property
+    def model(self) -> str:
+        return self._llm.model
+
+    def set_model(self, model: str) -> None:
+        self._llm.set_model(model)
+
+    @property
+    def model_loading(self) -> bool:
+        return self._model_loading
+
+    @property
+    def model_status(self) -> str:
+        return self._model_status
+
+    def ensure_ready(self) -> None:
+        if self._model_loading:
+            raise RuntimeError(self._model_status)
+
+    async def switch_model(self, model: str) -> None:
+        async with self._model_lock:
+            target = model.strip()
+            if not target:
+                return
+            if target == self.model and not self._model_loading:
+                return
+
+            previous = self.model
+            self._model_loading = True
+            self._model_status = f'Выгружается модель {previous}'
+            try:
+                if previous:
+                    await self._llm.unload_model(previous)
+                self._model_status = f'Загружается модель {target}'
+                self._llm.set_model(target)
+                await self._llm.preload_model(target)
+                self._model_status = f'Модель {target} готова'
+            except Exception:
+                self._llm.set_model(previous)
+                self._model_status = f'Не удалось загрузить модель {target}'
+                raise
+            finally:
+                self._model_loading = False
+
+    async def list_models(self) -> list[str]:
+        return await self._llm.list_models()
 
     async def suggest_replies(self, incoming_text: str, analysis: AnalysisResult, context: str = '') -> list[str]:
         context_block = ''
