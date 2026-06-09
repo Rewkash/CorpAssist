@@ -1,91 +1,80 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import './supportChat.css'
 
-import { assignWorker, closeConversation, getClientConversationHistory, getClients, getConversations, getMessages, getWorkers, improveDraft, login, markMessagesRead, me, register, sendMessage, setConversationTags, startConversation, suggestConversationTags, suggestReply, takeConversation } from './api'
+import { assignWorker, closeConversation, getClientConversationHistory, getClients, getConversations, getMessages, getWorkers, improveDraft, markMessagesRead, me, sendMessage, setConversationTags, startConversation, suggestConversationTags, suggestReply, takeConversation } from './api'
 import type { ChatMessage, Conversation } from './api'
+import { AuthScreen } from './components/AuthScreen'
+import { ChatHeader } from './components/ChatHeader'
+import { ClosedConversationPanel } from './components/ClosedConversationPanel'
+import { ConversationList } from './components/ConversationList'
+import { JumpToBottomButton } from './components/JumpToBottomButton'
+import { MessageComposer } from './components/MessageComposer'
+import { MessageList } from './components/MessageList'
+import { RightSidebar } from './components/RightSidebar'
+import { formatHistoryDate } from './features/chat/chatFormatters'
+import { filterConversations, getActiveClientEmail, getActiveConversation, getVisibleConversationTags, isConversationClosed } from './features/chat/chatSelectors'
 import { useChat } from './useChat'
 import { useAssistStore } from './store'
 
-type AuthMode = 'login' | 'register'
+function useComposerState() {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [assistBusy, setAssistBusy] = useState(false)
+  const [assistHint, setAssistHint] = useState('')
+  const [generatingStatus, setGeneratingStatus] = useState('')
+  const [replySuggestions, setReplySuggestions] = useState<string[]>([])
 
-function AuthScreen() {
-  const { setAuth, theme, toggleTheme } = useAssistStore()
-  const [mode, setMode] = useState<AuthMode>('login')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [registerRole, setRegisterRole] = useState<'client' | 'worker'>('client')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const onSubmit = async (event: FormEvent) => {
-    event.preventDefault()
-    setError('')
-    setLoading(true)
-    try {
-      const token = mode === 'login' ? await login({ email, password }) : await register({ email, password, role: registerRole })
-      const profile = await me(token)
-      setAuth(token, profile.email, profile.role)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось выполнить вход')
-    } finally {
-      setLoading(false)
-    }
+  return {
+    text,
+    setText,
+    busy,
+    setBusy,
+    assistBusy,
+    setAssistBusy,
+    assistHint,
+    setAssistHint,
+    generatingStatus,
+    setGeneratingStatus,
+    replySuggestions,
+    setReplySuggestions,
   }
+}
 
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_0%_0%,#dde9ff_0%,#f6f8fc_40%,#eef2f8_100%)] p-4 dark:bg-[radial-gradient(circle_at_0%_0%,#1a2437_0%,#0b1220_45%,#0a101b_100%)]">
-      <div className="w-full max-w-md rounded-3xl border border-white/50 bg-white/80 p-6 shadow-2xl backdrop-blur-xl dark:border-slate-700/80 dark:bg-slate-900/75">
-        <div className="mb-5 flex items-start justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">CorpAssist</p>
-            <h1 className="text-2xl font-semibold">Чат с поддержкой</h1>
-          </div>
-          <button onClick={toggleTheme} className="rounded-lg border border-slate-300 px-3 py-2 text-xs dark:border-slate-700">
-            {theme === 'light' ? 'Dark' : 'Light'}
-          </button>
-        </div>
+function useSidebarUiState() {
+  const [search, setSearch] = useState('')
+  const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [mobileMode, setMobileMode] = useState<'list' | 'chat' | 'info'>('chat')
+  const [viewportWidth, setViewportWidth] = useState<number>(typeof window !== 'undefined' ? window.innerWidth : 1440)
+  const [manualTag, setManualTag] = useState('')
+  const [showTagDropdown, setShowTagDropdown] = useState(false)
+  const tagDropdownRef = useRef<HTMLDivElement | null>(null)
 
-        <div className="mb-4 grid grid-cols-2 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
-          <button onClick={() => setMode('login')} className={clsx('rounded-lg py-2 text-sm', mode === 'login' && 'bg-white shadow dark:bg-slate-700')}>
-            Вход
-          </button>
-          <button onClick={() => setMode('register')} className={clsx('rounded-lg py-2 text-sm', mode === 'register' && 'bg-white shadow dark:bg-slate-700')}>
-            Регистрация
-          </button>
-        </div>
-
-        <form onSubmit={onSubmit} className="space-y-3">
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" required className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-cyan-500 dark:border-slate-700 dark:bg-slate-950" />
-          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Пароль" type="password" minLength={8} required className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-cyan-500 dark:border-slate-700 dark:bg-slate-950" />
-          {mode === 'register' && (
-            <select value={registerRole} onChange={(e) => setRegisterRole(e.target.value as 'client' | 'worker')} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-cyan-500 dark:border-slate-700 dark:bg-slate-950">
-              <option value="client">Я клиент</option>
-              <option value="worker">Я сотрудник</option>
-            </select>
-          )}
-          {error && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/30 dark:text-rose-300">{error}</div>}
-          <button disabled={loading} className="w-full rounded-xl bg-slate-900 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:opacity-60 dark:bg-cyan-600 dark:hover:bg-cyan-500">
-            {loading ? 'Проверяем...' : mode === 'login' ? 'Войти' : 'Создать аккаунт'}
-          </button>
-        </form>
-      </div>
-    </div>
-  )
+  return {
+    search,
+    setSearch,
+    rightCollapsed,
+    setRightCollapsed,
+    mobileMode,
+    setMobileMode,
+    viewportWidth,
+    setViewportWidth,
+    manualTag,
+    setManualTag,
+    showTagDropdown,
+    setShowTagDropdown,
+    tagDropdownRef,
+  }
 }
 
 function ChatScreen() {
   const { token, role, email, theme, toggleTheme, logout, conversationId, setConversationId } = useAssistStore()
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [text, setText] = useState('')
   const [error, setError] = useState('')
   const [connectionError, setConnectionError] = useState(false)
   const [reconnectIn, setReconnectIn] = useState<number | null>(null)
   const [isReconnectingNow, setIsReconnectingNow] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [assistBusy, setAssistBusy] = useState(false)
-  const [assistHint, setAssistHint] = useState('')
-  const [generatingStatus, setGeneratingStatus] = useState('')
+  const composer = useComposerState()
   const [myId, setMyId] = useState<number | null>(null)
   const messagesRef = useRef<HTMLDivElement | null>(null)
   const prevConversationRef = useRef<number | null>(null)
@@ -109,17 +98,40 @@ function ChatScreen() {
   const [workers, setWorkers] = useState<{ id: number; email: string }[]>([])
   const [assignClientId, setAssignClientId] = useState<number | null>(null)
   const [assignWorkerId, setAssignWorkerId] = useState<number | null>(null)
-  const [search, setSearch] = useState('')
-  const [rightCollapsed, setRightCollapsed] = useState(false)
-  const [mobileMode, setMobileMode] = useState<'list' | 'chat' | 'info'>('chat')
-  const [viewportWidth, setViewportWidth] = useState<number>(typeof window !== 'undefined' ? window.innerWidth : 1440)
+  const sidebarUi = useSidebarUiState()
   const [suggestedTags, setSuggestedTags] = useState<string[]>([])
-  const [replySuggestions, setReplySuggestions] = useState<string[]>([])
-  const [manualTag, setManualTag] = useState('')
-  const [showTagDropdown, setShowTagDropdown] = useState(false)
-  const tagDropdownRef = useRef<HTMLDivElement | null>(null)
   const bottomPanelRef = useRef<HTMLDivElement | null>(null)
   const frequentTags = ['Миграция', 'Срочно', 'VIP', 'Ожидание', 'Технический', 'Оплата']
+
+  const {
+    text,
+    setText,
+    busy,
+    setBusy,
+    assistBusy,
+    setAssistBusy,
+    assistHint,
+    setAssistHint,
+    generatingStatus,
+    setGeneratingStatus,
+    replySuggestions,
+    setReplySuggestions,
+  } = composer
+
+  const {
+    search,
+    setSearch,
+    rightCollapsed,
+    setRightCollapsed,
+    mobileMode,
+    viewportWidth,
+    setViewportWidth,
+    manualTag,
+    setManualTag,
+    showTagDropdown,
+    setShowTagDropdown,
+    tagDropdownRef,
+  } = sidebarUi
 
   const scrollToUnreadAnchor = (behavior: ScrollBehavior = 'auto') => {
     const el = messagesRef.current
@@ -568,23 +580,10 @@ function ChatScreen() {
     }
   }
 
-  const activeConversation = conversationId ? (conversations.find((c) => c.id === conversationId) || clientHistory.find((c) => c.id === conversationId) || selectedConversation) : null
-  const activeClientEmail = activeConversation?.client_email || clients.find((c) => c.id === activeConversation?.client_id)?.email || (role === 'client' && activeConversation ? email : activeConversation ? `Клиент #${activeConversation.client_id}` : '—')
-  const isActiveConversationClosed = activeConversation?.status === 'closed'
-  const filteredConversations = conversations.filter((c) => `${c.id} ${c.title}`.toLowerCase().includes(search.toLowerCase()))
-  const formatHistoryDate = (iso: string) => {
-    const dt = new Date(iso)
-    const now = new Date()
-    const diffMs = now.getTime() - dt.getTime()
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-    if (diffDays >= 0 && diffDays < 7) {
-      if (diffDays === 0) return 'сегодня'
-      if (diffDays === 1) return '1 день назад'
-      if (diffDays < 5) return `${diffDays} дня назад`
-      return `${diffDays} дней назад`
-    }
-    return dt.toLocaleDateString('ru-RU')
-  }
+  const activeConversation = getActiveConversation(conversationId, conversations, clientHistory, selectedConversation)
+  const activeClientEmail = getActiveClientEmail(activeConversation, clients, role, email)
+  const isActiveConversationClosed = isConversationClosed(activeConversation)
+  const filteredConversations = filterConversations(conversations, search)
 
   const closeTicket = async () => {
     if (!token || !conversationId) return
@@ -627,8 +626,7 @@ function ChatScreen() {
     setAssistHint('Новый диалог будет создан после первого сообщения.')
   }
 
-  const hiddenClientTags = new Set(['срочно', 'приоритет'])
-  const activeTags = (activeConversation?.tags || []).filter((tag) => role !== 'client' || !hiddenClientTags.has(tag.trim().toLowerCase()))
+  const activeTags = getVisibleConversationTags(activeConversation, role)
   const addTag = async (tag: string) => {
     if (!token || !conversationId || role === 'client') return
     const normalized = tag.trim()
@@ -714,302 +712,106 @@ function ChatScreen() {
       <div
         className={clsx('appShell', rightCollapsed && 'rightCollapsed')}
       >
-        <aside className="panel left">
-          <div className="leftHeader">
-            <div className="userChip">
-              <div className="avatar">{email.slice(0, 2).toUpperCase()}</div>
-              <div className="nameWrap">
-                <div className="name">{email}</div>
-                <div className="sub">{role === 'admin' ? 'Администратор' : role === 'worker' ? 'Сотрудник' : 'Клиент'}</div>
-              </div>
-            </div>
-            <button onClick={logout} className="btn">Выйти</button>
-          </div>
-          <div className="searchWrap">
-            <input className="searchInput" placeholder="Поиск по диалогам..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <div className="dialogList">
-            {filteredConversations.map((c) => (
-              <button key={c.id} onClick={() => onTakeConversation(c.id)} className={clsx('dialogCard', conversationId === c.id && 'active')}>
-                {c.unread_count > 0 && <span className="unreadBadge">{c.unread_count}</span>}
-                <div className="row">
-                  <span className="ticket">
-                    {role !== 'client' && c.priority_at && <span className="priorityDot" aria-hidden="true">●</span>}
-                    Диалог #{c.id}
-                  </span>
-                </div>
-                <div className="preview">{c.title}</div>
-                <div className="row" style={{ marginTop: 8 }}>
-                  <span className={clsx('badge', c.status === 'closed' ? 'closed' : c.worker_id ? 'open' : 'pending')}>
-                    {c.status === 'closed' ? 'Закрыт' : c.worker_id ? 'Назначен' : 'Свободен'}
-                  </span>
-                  {role !== 'client' && c.priority_at && <span className="badge urgent">Срочно</span>}
-                </div>
-              </button>
-            ))}
-          </div>
-        </aside>
+        <ConversationList
+          email={email}
+          role={role}
+          search={search}
+          conversations={filteredConversations}
+          conversationId={conversationId}
+          onSearchChange={setSearch}
+          onTakeConversation={onTakeConversation}
+          onLogout={logout}
+        />
 
         <main className="center" style={{ display: mobileMode === 'chat' ? 'flex' : undefined }}>
-          <div className="centerHeader">
-            <div className="headerLeft">
-              <div className="clientName">{activeConversation ? `Диалог #${activeConversation.id}` : 'Диалог не выбран'}</div>
-              <div className="sub">{activeConversation ? activeConversation.title : '—'}</div>
-            </div>
-            <div className="headerActions">
-              {role === 'client' && (
-                <button className="btn ghostAccent headerActionBtn" onClick={createClientConversation} title="Новый диалог" aria-label="Новый диалог">
-                  <span className="actionIcon" aria-hidden="true">＋</span>
-                  <span className="actionLabel">Новый диалог</span>
-                </button>
-              )}
-              <button className="btn headerActionBtn" onClick={closeTicket} disabled={!conversationId || role === 'client'} title="Закрыть тикет" aria-label="Закрыть тикет">
-                <span className="actionIcon" aria-hidden="true">✓</span>
-                <span className="actionLabel">Закрыть тикет</span>
-              </button>
-              <button className="btn ghostAccent headerActionBtn" onClick={transferTicket} title="Передать" aria-label="Передать">
-                <span className="actionIcon" aria-hidden="true">⇄</span>
-                <span className="actionLabel">Передать</span>
-              </button>
-              <button className="collapseBtn" title="Свернуть правую панель" onClick={() => setRightCollapsed((v) => !v)}>{rightCollapsed ? '◀' : '▶'}</button>
-            </div>
-          </div>
-          <div key={conversationId ?? 'empty'} ref={messagesRef} onScroll={handleMessagesScroll} className="messagesList">
-            {messages.length === 0 ? (
-              <div className="emptyState"><div className="emptyCard">Сообщений пока нет</div></div>
-            ) : (
-              messages.map((m) => {
-                const mine = myId !== null && m.sender_id === myId
-                const isFirstUnread = m.id === firstUnreadId
-                const time = m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
-                const checks = m.status === 'sent' ? '✓' : '✓✓'
-                const checksClass = m.status === 'read' ? 'text-sky-300' : 'text-slate-300'
-                return (
-                  <div key={m.id}>
-                    {isFirstUnread && (
-                      <div className={clsx('unreadDivider', isUnreadDividerHiding && 'hiding')} id="unread-anchor">
-                        <span>Новые сообщения</span>
-                      </div>
-                    )}
-                    <div className={clsx('messageWrap', mine ? 'operator' : 'client', isFirstUnread && 'highlightNew')}>
-                      <div className="bubbleCol">
-                        <div className={clsx('bubble', mine ? 'operator' : 'client')}>
-                          <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
-                        </div>
-                        <div className="msgTime">
-                          {time} {mine && <span className={checksClass}>{checks}</span>}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )
-              })
-            )}
-          </div>
+          <ChatHeader
+            activeConversation={activeConversation}
+            role={role}
+            conversationId={conversationId}
+            rightCollapsed={rightCollapsed}
+            onCreateClientConversation={createClientConversation}
+            onCloseTicket={closeTicket}
+            onTransferTicket={transferTicket}
+            onToggleRightCollapsed={() => setRightCollapsed((v) => !v)}
+          />
+          <MessageList
+            conversationId={conversationId}
+            messages={messages}
+            myId={myId}
+            firstUnreadId={firstUnreadId}
+            isUnreadDividerHiding={isUnreadDividerHiding}
+            messagesRef={messagesRef}
+            onScroll={handleMessagesScroll}
+          />
           {showJumpDown && (
-            <div className="jumpWrap" style={{ bottom: `${jumpBottomOffset}px` }}>
-              <button onClick={jumpToBottom} className="jumpBtn" title="К последним сообщениям" aria-label="К последним сообщениям">
-                <span className="jumpArrow">↓</span>
-                {newMessagesCount > 0 && <span className="jumpBadge">{newMessagesCount}</span>}
-              </button>
-            </div>
+            <JumpToBottomButton bottomOffset={jumpBottomOffset} newMessagesCount={newMessagesCount} onClick={jumpToBottom} />
           )}
           {isActiveConversationClosed ? (
-            <div ref={bottomPanelRef} className="closedUiWrap">
-              <div className="closedBlock">
-                <div className="checkCircle" aria-hidden="true">✓</div>
-                <div className="closedText">
-                  <div className="closedTitle">Диалог завершен</div>
-                  <div className="closedSub">Тикет закрыт - новые сообщения недоступны</div>
-                </div>
-                <div className="closedTime">
-                  {activeConversation?.closed_at
-                    ? new Date(activeConversation.closed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                    : '—'}
-                </div>
-              </div>
-              <div className="inputDead" aria-hidden="true">
-                <span className="inputDeadLock">🔒</span>
-                <span>Ввод заблокирован</span>
-              </div>
-            </div>
+            <ClosedConversationPanel closedAt={activeConversation?.closed_at} bottomPanelRef={bottomPanelRef} />
           ) : (
-          <div ref={bottomPanelRef} className="composer">
-            <div className="aiRow">
-              <button onClick={onSuggest} disabled={assistBusy} className="btn ghostAccent">Подсказать ответ</button>
-              <button onClick={onImprove} disabled={assistBusy} className="btn">Улучшить текст</button>
-              {assistBusy && <span className="text-sm text-cyan-300">{generatingStatus || 'Генерация...'}</span>}
-            </div>
-            {replySuggestions.length > 0 && (
-              <div className="replySuggestions">
-                <div className="replySuggestionsHead">
-                  <span>Варианты ответа</span>
-                  <button className="replySuggestionsClose" onClick={() => setReplySuggestions([])} aria-label="Скрыть варианты">×</button>
-                </div>
-                <div className="replySuggestionsGrid">
-                  {replySuggestions.map((suggestion, index) => (
-                    <button
-                      key={`${index}-${suggestion.slice(0, 24)}`}
-                      className="replySuggestionCard"
-                      onClick={() => {
-                        setText(suggestion)
-                        setReplySuggestions([])
-                        setAssistHint('Вариант подставлен в поле ввода.')
-                      }}
-                    >
-                      <span className="replySuggestionNum">{index + 1}</span>
-                      <span>{suggestion}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div className="textareaWrap">
-              <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
+            <MessageComposer
+              text={text}
+              busy={busy}
+              role={role}
+              conversationId={conversationId}
+              assistBusy={assistBusy}
+              generatingStatus={generatingStatus}
+              replySuggestions={replySuggestions}
+              connectionError={connectionError}
+              isReconnectingNow={isReconnectingNow}
+              reconnectIn={reconnectIn}
+              error={error}
+              assistHint={assistHint}
+              bottomPanelRef={bottomPanelRef}
+              onSuggest={onSuggest}
+              onImprove={onImprove}
+              onSend={onSend}
+              onTextChange={(e) => setText(e.target.value)}
+              onTextKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
                   onSend()
                 }
-              }} placeholder={isActiveConversationClosed ? 'Диалог закрыт' : 'Введите сообщение...'} className="input" disabled={isActiveConversationClosed} />
-              <button onClick={onSend} disabled={busy || (role !== 'client' && !conversationId) || isActiveConversationClosed} className="sendBtn">{busy ? '...' : 'Отправить'}</button>
-            </div>
-            {connectionError && (
-              <p className="mt-2 text-sm text-amber-300">
-                {isReconnectingNow ? 'Подключение...' : `Не удалось подключиться. Проверьте интернет и попробуйте еще раз. Повторная попытка через ${reconnectIn ?? 5} сек.`}
-              </p>
-            )}
-            {error && !(connectionError && error.includes('Не удалось подключиться')) && <p className="mt-2 text-sm text-rose-300">{error}</p>}
-            {assistHint && <p className="mt-2 text-sm text-emerald-300">{assistHint}</p>}
-          </div>
+              }}
+              onHideSuggestions={() => setReplySuggestions([])}
+              onSelectSuggestion={(suggestion) => {
+                setText(suggestion)
+                setReplySuggestions([])
+                setAssistHint('Вариант подставлен в поле ввода.')
+              }}
+            />
           )}
         </main>
 
-        <aside className="panel right" style={{ display: mobileMode === 'info' ? 'flex' : undefined }}>
-          <div className="rightHeader">
-            <div className="name">Инфо о клиенте</div>
-          </div>
-          <div className="rightBody">
-            <div className="card">
-              <div className="cardTitle">Карточка клиента</div>
-              <div className="kv"><div className="kvKey">Email</div><div>{activeConversation ? activeClientEmail : '—'}</div></div>
-              <div className="kv"><div className="kvKey">Клиент ID</div><div>{activeConversation ? activeConversation.client_id : '—'}</div></div>
-              <div className="kv"><div className="kvKey">Диалог</div><div>{activeConversation ? `#${activeConversation.id}` : '—'}</div></div>
-            </div>
-
-            <div className="card historyCard">
-              <div className="cardTitle">История тикетов</div>
-              <div className="historyList growList">
-                {clientHistory.length <= 1 && activeConversation ? <div className="historyEmpty">Первое обращение клиента</div> : null}
-                {clientHistory.map((c) => (
-                  <button
-                    key={`h-${c.id}`}
-                    className={clsx('historyItem', 'historyItemBtn', conversationId === c.id && 'active')}
-                    onClick={() => onTakeConversation(c.id)}
-                    title={new Date(c.created_at).toLocaleDateString('ru-RU')}
-                  >
-                    <div className="historyTop">
-                      <span className="historyTicket">#{c.id}</span>
-                      <span className={clsx('historyStatus', c.status === 'closed' ? 'closed' : 'open')}>
-                        {c.status === 'closed' ? 'Закрыт' : 'Открыт'}
-                      </span>
-                    </div>
-                    <div className="historyPreview">{c.first_message_preview || c.title}</div>
-                    <div className="historyMeta">
-                      <span className="historyDate">{formatHistoryDate(c.created_at)}</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="card">
-              <div className="cardTitle">Теги и метки</div>
-              {role !== 'client' && (
-                <button
-                  className={clsx('priorityBtn', activeTags.includes('Срочно') && 'active')}
-                  onClick={() => void togglePriority()}
-                >
-                  <span aria-hidden="true">⚑</span>
-                  <span>{activeTags.includes('Срочно') ? 'Приоритет активен' : 'Сделать приоритетным'}</span>
-                </button>
-              )}
-              <div className="tags" style={{ marginBottom: 8 }}>
-                {activeTags.map((tag) => (
-                  <span key={`t-${tag}`} className="tag tagWithClose">
-                    {tag}
-                    {role !== 'client' && <button className="tagClose" onClick={() => removeTag(tag)}>×</button>}
-                  </span>
-                ))}
-              </div>
-              {role !== 'client' && (
-                <>
-                  <div className="tags" style={{ marginBottom: 8 }}>
-                    {suggestedTags.filter((tag) => !activeTags.includes(tag)).map((tag) => (
-                      <button key={`s-${tag}`} className="tagAddBtn" onClick={() => addTag(tag)}>+ {tag}</button>
-                    ))}
-                  </div>
-                  <div className="tagManualRow">
-                    <div className="tagInputWrap" ref={tagDropdownRef}>
-                      <input
-                        value={manualTag}
-                        onChange={(e) => setManualTag(e.target.value)}
-                        onFocus={() => setShowTagDropdown(true)}
-                        onClick={() => setShowTagDropdown(true)}
-                        placeholder="Свой тег"
-                        className="input"
-                        style={{ minHeight: 38, maxHeight: 38 }}
-                      />
-                      {showTagDropdown && (
-                        <div className="tagDropdown">
-                          {frequentTags.filter((tag) => !activeTags.includes(tag)).map((tag) => (
-                            <button
-                              key={`f-${tag}`}
-                              className="tagDropdownItem"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => {
-                                void addTag(tag)
-                                setManualTag('')
-                                setShowTagDropdown(false)
-                              }}
-                            >
-                              {tag}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <button className="btn" onClick={() => { void addTag(manualTag); setManualTag('') }}>Добавить тег</button>
-                  </div>
-                </>
-              )}
-              {role === 'client' && (
-                <div className="tags">
-                  {activeTags.length === 0 ? <span className="sub">Теги пока не заданы</span> : null}
-                </div>
-              )}
-            </div>
-
-          {role === 'admin' && (
-            <div className="card">
-              <div className="cardTitle">Админ: назначение</div>
-              <div className="flex flex-wrap gap-2">
-                <select value={assignClientId ?? ''} onChange={(e) => setAssignClientId(Number(e.target.value))} className="input" style={{ minHeight: 40, maxHeight: 40 }}>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>{c.email}</option>
-                  ))}
-                </select>
-                <select value={assignWorkerId ?? ''} onChange={(e) => setAssignWorkerId(Number(e.target.value))} className="input" style={{ minHeight: 40, maxHeight: 40 }}>
-                  {workers.map((w) => (
-                    <option key={w.id} value={w.id}>{w.email}</option>
-                  ))}
-                </select>
-                <button onClick={onAssignWorker} className="btn primary">Назначить</button>
-              </div>
-            </div>
-          )}
-
-          </div>
-        </aside>
+        <RightSidebar
+          mobileMode={mobileMode}
+          activeConversation={activeConversation}
+          activeClientEmail={activeClientEmail}
+          clientHistory={clientHistory}
+          conversationId={conversationId}
+          role={role}
+          activeTags={activeTags}
+          suggestedTags={suggestedTags}
+          frequentTags={frequentTags}
+          manualTag={manualTag}
+          showTagDropdown={showTagDropdown}
+          tagDropdownRef={tagDropdownRef}
+          assignClientId={assignClientId}
+          assignWorkerId={assignWorkerId}
+          clients={clients}
+          workers={workers}
+          onTakeConversation={onTakeConversation}
+          onTogglePriority={() => void togglePriority()}
+          onAddTag={(tag) => void addTag(tag)}
+          onRemoveTag={(tag) => void removeTag(tag)}
+          onManualTagChange={setManualTag}
+          onShowTagDropdown={() => setShowTagDropdown(true)}
+          onHideTagDropdown={() => setShowTagDropdown(false)}
+          onAssignClientId={setAssignClientId}
+          onAssignWorkerId={setAssignWorkerId}
+          onAssignWorker={onAssignWorker}
+          formatHistoryDate={formatHistoryDate}
+        />
       </div>
     </div>
   )
