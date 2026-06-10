@@ -26,6 +26,7 @@ from app.schemas import (
 )
 from app.services.assist_context import build_client_context
 from app.services.conversation_access import get_accessible_conversation
+from app.services.conversation_list import list_conversations_for_user
 from app.services.conversation_presenter import build_conversation_items
 from app.services.conversation_tags import suggest_conversation_tags_for_user
 from app.services.llm_guard import ensure_llm_ready
@@ -95,7 +96,7 @@ async def push_conversations_snapshot(db: AsyncSession, conversation: Conversati
         viewer = user_result.scalar_one_or_none()
         if not viewer:
             continue
-        items = await chat_conversations(user=viewer, db=db)
+        items = await list_conversations_for_user(db, viewer)
         await user_socket_hub.send_to_user(
             user_id,
             {
@@ -122,26 +123,7 @@ async def chat_conversations(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ConversationItem]:
-    if user.role == 'client':
-        result = await db.execute(
-            select(Conversation)
-            .where(Conversation.client_id == user.id)
-            .order_by(Conversation.priority_at.asc().nullslast(), Conversation.created_at.desc())
-        )
-    elif user.role == 'worker':
-        result = await db.execute(
-            select(Conversation)
-            .where((Conversation.worker_id == user.id) | ((Conversation.worker_id.is_(None)) & (Conversation.status == 'open')))
-            .order_by(Conversation.priority_at.asc().nullslast(), Conversation.created_at.desc())
-        )
-    else:
-        result = await db.execute(
-            select(Conversation)
-            .order_by(Conversation.priority_at.asc().nullslast(), Conversation.created_at.desc())
-            .limit(100)
-        )
-    rows = result.scalars().all()
-    return await build_conversation_items(db, user, rows)
+    return await list_conversations_for_user(db, user)
 
 
 @app.get('/chat/conversations/{conversation_id}/client-history', response_model=list[ConversationItem])
