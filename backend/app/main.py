@@ -13,31 +13,20 @@ from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine, get_db
 from app.deps import get_current_user, require_role
 from app.generator import generator_service
-from app.models import ChatMessage, Conversation, MessageHistory, User
+from app.models import ChatMessage, Conversation, User
 from app.nlp import nlp_service
 from app.realtime.hubs import ChatSocketClient, ChatSocketHub, UserSocketHub
-from app.routes import admin, auth, debug_llm
+from app.routes import admin, assist, auth, debug_llm
 from app.schemas import (
     ChatMessageItem,
     ConversationItem,
-    HistoryItem,
-    ImproveDraftRequest,
-    ImproveDraftResponse,
     MarkReadRequest,
     SetConversationTagsRequest,
     SendChatMessageRequest,
-    SuggestReplyRequest,
-    SuggestReplyResponse,
 )
-from app.services.assist_context import build_client_context, build_conversation_context
+from app.services.assist_context import build_client_context
 from app.services.conversation_presenter import build_conversation_items
-
-
-def ensure_llm_ready() -> None:
-    try:
-        generator_service.ensure_ready()
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+from app.services.llm_guard import ensure_llm_ready
 
 
 @asynccontextmanager
@@ -72,6 +61,7 @@ app.add_middleware(
 )
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(assist.router)
 app.include_router(debug_llm.router)
 
 
@@ -446,88 +436,6 @@ async def set_conversation_tags(
     items = await build_conversation_items(db, user, [conversation])
     await push_conversations_snapshot(db, conversation)
     return items[0]
-
-
-@app.post('/assist/reply', response_model=SuggestReplyResponse)
-async def suggest_reply(
-    payload: SuggestReplyRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> SuggestReplyResponse:
-    ensure_llm_ready()
-    analysis = await nlp_service.analyze(payload.text)
-    context = ''
-    if user.role == 'client':
-        context = await build_client_context(db, user.id)
-    elif user.role == 'worker' and payload.conversation_id:
-        conv_result = await db.execute(select(Conversation).where(Conversation.id == payload.conversation_id))
-        conv = conv_result.scalar_one_or_none()
-        if conv and conv.client_id:
-            context = await build_conversation_context(db, conv)
-    suggestions = await generator_service.suggest_replies(payload.text, analysis, context)
-
-    response = SuggestReplyResponse(analysis=analysis, suggestions=suggestions)
-
-    db.add(
-        MessageHistory(
-            user_id=user.id,
-            mode='reply',
-            source_text=payload.text,
-            result_text='\n---\n'.join(suggestions),
-            sentiment=analysis.sentiment,
-            topics=', '.join(analysis.topics),
-            formality=analysis.formality,
-        )
-    )
-    await db.commit()
-    return response
-
-
-@app.post('/assist/improve', response_model=ImproveDraftResponse)
-async def improve_draft(
-    payload: ImproveDraftRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> ImproveDraftResponse:
-    ensure_llm_ready()
-    analysis = await nlp_service.analyze(payload.text)
-    context = ''
-    if user.role == 'client':
-        context = await build_client_context(db, user.id)
-    elif user.role == 'worker' and payload.conversation_id:
-        conv_result = await db.execute(select(Conversation).where(Conversation.id == payload.conversation_id))
-        conv = conv_result.scalar_one_or_none()
-        if conv and conv.client_id:
-            context = await build_conversation_context(db, conv)
-    improved = await generator_service.improve_draft(payload.text, analysis, context)
-    diff = nlp_service.make_diff(payload.text, improved)
-
-    response = ImproveDraftResponse(analysis=analysis, improved_text=improved, diff=diff)
-
-    db.add(
-        MessageHistory(
-            user_id=user.id,
-            mode='improve',
-            source_text=payload.text,
-            result_text=improved,
-            sentiment=analysis.sentiment,
-            topics=', '.join(analysis.topics),
-            formality=analysis.formality,
-        )
-    )
-    await db.commit()
-    return response
-
-
-@app.get('/history', response_model=list[HistoryItem])
-async def history(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> list[HistoryItem]:
-    result = await db.execute(
-        select(MessageHistory).where(MessageHistory.user_id == user.id).order_by(MessageHistory.created_at.desc()).limit(30)
-    )
-    return [HistoryItem.model_validate(row) for row in result.scalars().all()]
 
 
 @app.websocket('/ws/chat/{conversation_id}')
