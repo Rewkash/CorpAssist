@@ -15,6 +15,7 @@ from app.deps import get_current_user, require_role
 from app.generator import generator_service
 from app.models import ChatMessage, Conversation, User
 from app.nlp import nlp_service
+from app.realtime.conversation_snapshots import push_conversations_snapshot
 from app.realtime.hubs import ChatSocketClient, ChatSocketHub, UserSocketHub
 from app.routes import admin, assist, auth, debug_llm
 from app.schemas import (
@@ -83,29 +84,6 @@ async def resolve_ws_user(websocket: WebSocket, db: AsyncSession) -> User | None
     return result.scalar_one_or_none()
 
 
-async def push_conversations_snapshot(db: AsyncSession, conversation: Conversation) -> None:
-    target_user_ids = {conversation.client_id}
-    if conversation.worker_id:
-        target_user_ids.add(conversation.worker_id)
-
-    admin_result = await db.execute(select(User.id).where(User.role == 'admin'))
-    target_user_ids.update(row.id for row in admin_result.all())
-
-    for user_id in target_user_ids:
-        user_result = await db.execute(select(User).where(User.id == user_id))
-        viewer = user_result.scalar_one_or_none()
-        if not viewer:
-            continue
-        items = await list_conversations_for_user(db, viewer)
-        await user_socket_hub.send_to_user(
-            user_id,
-            {
-                'type': 'conversations_snapshot',
-                'payload': [item.model_dump(mode='json') for item in items],
-            },
-        )
-
-
 @app.get('/health')
 async def health() -> dict[str, Any]:
     ollama_ok = False
@@ -166,7 +144,7 @@ async def start_chat(
         db.add(conversation)
         await db.commit()
         await db.refresh(conversation)
-        await push_conversations_snapshot(db, conversation)
+        await push_conversations_snapshot(db, conversation, user_socket_hub=user_socket_hub)
     items = await build_conversation_items(db, user, [conversation])
     return items[0]
 
@@ -187,7 +165,7 @@ async def take_conversation(
     await db.commit()
     await db.refresh(conversation)
     items = await build_conversation_items(db, user, [conversation])
-    await push_conversations_snapshot(db, conversation)
+    await push_conversations_snapshot(db, conversation, user_socket_hub=user_socket_hub)
     return items[0]
 
 
@@ -240,7 +218,7 @@ async def send_chat_message(
             'payload': item.model_dump(mode='json'),
         },
     )
-    await push_conversations_snapshot(db, conversation)
+    await push_conversations_snapshot(db, conversation, user_socket_hub=user_socket_hub)
     return item
 
 
@@ -273,7 +251,7 @@ async def mark_messages_read(
             'payload': {'viewer_id': user.id},
         },
     )
-    await push_conversations_snapshot(db, conversation)
+    await push_conversations_snapshot(db, conversation, user_socket_hub=user_socket_hub)
     return {'status': 'ok'}
 
 
@@ -298,7 +276,7 @@ async def close_conversation(
     await db.commit()
     await db.refresh(conversation)
     items = await build_conversation_items(db, user, [conversation])
-    await push_conversations_snapshot(db, conversation)
+    await push_conversations_snapshot(db, conversation, user_socket_hub=user_socket_hub)
     return items[0]
 
 
@@ -308,11 +286,14 @@ async def suggest_conversation_tags(
     user: User = Depends(require_role('worker', 'admin')),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, list[str]]:
+    async def push_snapshot(db: AsyncSession, conversation: Conversation) -> None:
+        await push_conversations_snapshot(db, conversation, user_socket_hub=user_socket_hub)
+
     return await suggest_conversation_tags_for_user(
         db=db,
         conversation_id=conversation_id,
         user=user,
-        push_snapshot=push_conversations_snapshot,
+        push_snapshot=push_snapshot,
     )
 
 
@@ -345,7 +326,7 @@ async def set_conversation_tags(
     await db.commit()
     await db.refresh(conversation)
     items = await build_conversation_items(db, user, [conversation])
-    await push_conversations_snapshot(db, conversation)
+    await push_conversations_snapshot(db, conversation, user_socket_hub=user_socket_hub)
     return items[0]
 
 
