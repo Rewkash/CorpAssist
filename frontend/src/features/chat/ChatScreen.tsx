@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import '../../supportChat.css'
 
-import { getClientConversationHistory, getConversations, getMessages, markMessagesRead, sendMessage, startConversation, takeConversation } from '../../api'
+import { markMessagesRead } from '../../api'
 import type { ChatMessage, Conversation } from '../../api'
 import { ChatHeader } from '../../components/ChatHeader'
 import { ClosedConversationPanel } from '../../components/ClosedConversationPanel'
@@ -23,8 +23,10 @@ import { useComposerAssistActions } from './hooks/useComposerAssistActions'
 import { useComposerState } from './hooks/useComposerState'
 import { useConversationTags } from './hooks/useConversationTags'
 import { useConversationHistory } from './hooks/useConversationHistory'
+import { useMessageSending } from './hooks/useMessageSending'
 import { useSidebarUiState } from './hooks/useSidebarUiState'
 import { useSuggestedTags } from './hooks/useSuggestedTags'
+import { useTakeConversation } from './hooks/useTakeConversation'
 import { useTicketActions } from './hooks/useTicketActions'
 import { useWorkerAssignment } from './hooks/useWorkerAssignment'
 
@@ -156,99 +158,6 @@ export function ChatScreen() {
 
   useOutsideClick(tagDropdownRef, hideTagDropdown)
 
-  const onSend = async () => {
-    if (!token || text.trim().length < 1) return
-    if (isActiveConversationClosed) {
-      setError('')
-      setAssistHint('Этот диалог закрыт. Начните новый диалог, чтобы написать сообщение.')
-      return
-    }
-    setBusy(true)
-    setError('')
-    try {
-      const outgoingText = text.trim()
-      let targetConversationId = conversationId
-      if (!targetConversationId && role === 'client') {
-        const conv = await startConversation(token)
-        targetConversationId = conv.id
-        setConversationId(conv.id)
-        setSelectedConversation(conv)
-        const list = await getConversations(token)
-        setConversations(list)
-      }
-      if (!targetConversationId) {
-        setError('Сначала выберите диалог из списка или создайте новый.')
-        return
-      }
-
-      const item = await sendMessage(token, targetConversationId, outgoingText)
-      setMessages((prev) => [...prev, item])
-      clearUnreadDividerSmooth()
-      setText('')
-      setReplySuggestions([])
-      const items = await getMessages(token, targetConversationId)
-      forceScrollOnNextRenderRef.current = true
-      setMessages(items)
-      if (isAtBottomRef.current) {
-        await markMessagesRead(token, targetConversationId)
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Не удалось отправить сообщение'
-      if (message.includes('Диалог закрыт')) {
-        setError('')
-        setAssistHint('Этот диалог уже закрыт. Нажмите + Новый диалог, чтобы продолжить.')
-      } else {
-        setError(message)
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const { suggest: onSuggest, improve: onImprove } = useComposerAssistActions({
-    token,
-    text,
-    conversationId,
-    messages,
-    myId,
-    setText,
-    setAssistBusy,
-    setGeneratingStatus,
-    setError,
-    setReplySuggestions,
-    setAssistHint,
-  })
-
-  const onTakeConversation = async (id: number) => {
-    if (!token) return
-    try {
-      if (role !== 'client') {
-        const taken = await takeConversation(token, id)
-        setSelectedConversation(taken)
-      }
-      setConversationId(id)
-      const [list, items, history] = await Promise.all([getConversations(token), getMessages(token, id), getClientConversationHistory(token, id)])
-      setConversations(list)
-      setSelectedConversation((current) => list.find((c) => c.id === id) || current || null)
-      setClientHistory(history.length > 0 ? history : list.filter((c) => c.id === id))
-      const firstUnread = items.find((m) => m.sender_id !== myId && !m.read_at)
-      setFirstUnreadId(firstUnread?.id ?? null)
-      forceScrollOnNextRenderRef.current = true
-      setMessages(items)
-      await markMessagesRead(token, id)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось взять диалог')
-    }
-  }
-
-  const { assignSelectedWorker } = useWorkerAssignment({
-    token,
-    assignClientId,
-    assignWorkerId,
-    setClients,
-    setError,
-  })
-
   const {
     activeConversation,
     activeClientEmail,
@@ -264,6 +173,67 @@ export function ChatScreen() {
     role,
     email,
     search,
+  })
+
+  const { sendCurrentMessage } = useMessageSending({
+    auth: { token, role },
+    guards: { isActiveConversationClosed },
+    conversation: {
+      conversationId,
+      setConversationId,
+      setSelectedConversation,
+      setConversations,
+    },
+    composer: {
+      text,
+      setText,
+      setBusy,
+      setError,
+      setAssistHint,
+      setReplySuggestions,
+    },
+    messages: { setMessages },
+    scroll: {
+      clearUnreadDividerSmooth,
+      forceScrollOnNextRenderRef,
+      isAtBottomRef,
+    },
+  })
+
+  const { suggest: onSuggest, improve: onImprove } = useComposerAssistActions({
+    token,
+    text,
+    conversationId,
+    messages,
+    myId,
+    setText,
+    setAssistBusy,
+    setGeneratingStatus,
+    setError,
+    setReplySuggestions,
+    setAssistHint,
+  })
+
+  const { takeSelectedConversation } = useTakeConversation({
+    token,
+    role,
+    myId,
+    setConversationId,
+    setConversations,
+    setSelectedConversation,
+    setClientHistory,
+    setMessages,
+    setFirstUnreadId,
+    forceScrollOnNextRenderRef,
+    setError,
+  })
+
+  const { assignSelectedWorker } = useWorkerAssignment({
+    token,
+    assignClientId,
+    assignWorkerId,
+    setClients,
+    setError,
   })
 
   const { addTag, removeTag, togglePriority } = useConversationTags({
@@ -344,7 +314,7 @@ export function ChatScreen() {
           conversations={filteredConversations}
           conversationId={conversationId}
           onSearchChange={setSearch}
-          onTakeConversation={onTakeConversation}
+          onTakeConversation={takeSelectedConversation}
           onLogout={logout}
         />
 
@@ -390,12 +360,12 @@ export function ChatScreen() {
               bottomPanelRef={bottomPanelRef}
               onSuggest={onSuggest}
               onImprove={onImprove}
-              onSend={onSend}
+              onSend={sendCurrentMessage}
               onTextChange={(e) => setText(e.target.value)}
               onTextKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
-                  onSend()
+                  sendCurrentMessage()
                 }
               }}
               onHideSuggestions={() => setReplySuggestions([])}
@@ -425,7 +395,7 @@ export function ChatScreen() {
           assignWorkerId={assignWorkerId}
           clients={clients}
           workers={workers}
-          onTakeConversation={onTakeConversation}
+          onTakeConversation={takeSelectedConversation}
           onTogglePriority={() => void togglePriority()}
           onAddTag={(tag) => void addTag(tag)}
           onRemoveTag={(tag) => void removeTag(tag)}
