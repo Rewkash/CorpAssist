@@ -1,6 +1,7 @@
 import type { Conversation } from '../../api'
+import type { Role } from '../../store'
 
-type UserRole = 'admin' | 'worker' | 'client'
+type UserRole = Role | null
 
 type Client = {
   id: number
