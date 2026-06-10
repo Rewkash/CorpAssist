@@ -25,6 +25,7 @@ from app.schemas import (
     SendChatMessageRequest,
 )
 from app.services.assist_context import build_client_context
+from app.services.conversation_access import get_accessible_conversation
 from app.services.conversation_presenter import build_conversation_items
 from app.services.conversation_tags import suggest_conversation_tags_for_user
 from app.services.llm_guard import ensure_llm_ready
@@ -79,16 +80,6 @@ async def resolve_ws_user(websocket: WebSocket, db: AsyncSession) -> User | None
         return None
     result = await db.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
-
-
-async def get_accessible_conversation(db: AsyncSession, user: User, conversation_id: int) -> Conversation:
-    conv_result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
-    conversation = conv_result.scalar_one_or_none()
-    if not conversation:
-        raise HTTPException(status_code=404, detail='Диалог не найден')
-    if user.role != 'admin' and user.id not in (conversation.client_id, conversation.worker_id):
-        raise HTTPException(status_code=403, detail='Нет доступа к диалогу')
-    return conversation
 
 
 async def push_conversations_snapshot(db: AsyncSession, conversation: Conversation) -> None:
