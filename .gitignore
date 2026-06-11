@@ -16,6 +16,16 @@ dist/
 !backend/.env.example
 backend/.runtime_ollama_model
 
+# Local AI/tool metadata
+.opencode/
+.serena/
+
+# Generated frontend prototypes
+frontend/mp*
+frontend/support-chat-operator-ui*.html
+frontend/*.artifact.json
+frontend/support-workspace-app-closed-banner.jsx
+
 # IDE
 .idea/
 .vscode/
