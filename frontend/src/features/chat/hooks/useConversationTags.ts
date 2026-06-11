@@ -1,17 +1,12 @@
 import { getConversations, setConversationTags } from '../../../api'
-import type { Conversation } from '../../../api'
 import type { Role } from '../../../store'
-
-type SetState<T> = (value: T | ((prev: T) => T)) => void
+import { useChatStore } from '../store/chatStore'
 
 type UseConversationTagsParams = {
   token: string
   conversationId: number | null
   role: Role | null
   activeTags: string[]
-  setConversations: SetState<Conversation[]>
-  setSelectedConversation: SetState<Conversation | null>
-  setClientHistory: SetState<Conversation[]>
   setError: (message: string) => void
 }
 
@@ -20,11 +15,12 @@ export function useConversationTags({
   conversationId,
   role,
   activeTags,
-  setConversations,
-  setSelectedConversation,
-  setClientHistory,
   setError,
 }: UseConversationTagsParams) {
+  const setConversations = useChatStore((state) => state.setConversations)
+  const setSelectedConversation = useChatStore((state) => state.setSelectedConversation)
+  const setClientHistory = useChatStore((state) => state.setClientHistory)
+
   const updateTags = async (nextTags: string[], fallbackError: string) => {
     if (!token || !conversationId || role === 'client') return
     try {

@@ -1,22 +1,19 @@
 import { assignWorker, getClients } from '../../../api'
-
-type ClientOption = { id: number; email: string; assigned_worker_id: number | null }
+import { useChatStore } from '../store/chatStore'
 
 type UseWorkerAssignmentParams = {
   token: string
-  assignClientId: number | null
-  assignWorkerId: number | null
-  setClients: (clients: ClientOption[]) => void
   setError: (message: string) => void
 }
 
 export function useWorkerAssignment({
   token,
-  assignClientId,
-  assignWorkerId,
-  setClients,
   setError,
 }: UseWorkerAssignmentParams) {
+  const assignClientId = useChatStore((state) => state.assignClientId)
+  const assignWorkerId = useChatStore((state) => state.assignWorkerId)
+  const setClients = useChatStore((state) => state.setClients)
+
   const assignSelectedWorker = async () => {
     if (!token || !assignClientId || !assignWorkerId) return
     try {

@@ -1,10 +1,7 @@
 import { useEffect } from 'react'
 
 import { getClients, getConversations, getMessages, getWorkers, markMessagesRead, me } from '../../../api'
-import type { ChatMessage, Conversation } from '../../../api'
-
-type ClientOption = { id: number; email: string; assigned_worker_id: number | null }
-type WorkerOption = { id: number; email: string }
+import { useChatStore } from '../store/chatStore'
 
 type RefValue<T> = {
   current: T
@@ -16,19 +13,8 @@ type UseChatBootstrapParams = {
   conversationId: number | null
   reconnectPhaseStartedAtRef: RefValue<number | null>
   forceScrollOnNextRenderRef: RefValue<boolean>
-  setConnectionError: (value: boolean) => void
-  setIsReconnectingNow: (value: boolean) => void
-  setReconnectIn: (value: number | null) => void
   setError: (value: string) => void
-  setMyId: (value: number | null) => void
-  setConversations: (value: Conversation[]) => void
-  setSelectedConversation: (value: Conversation | null) => void
-  setMessages: (value: ChatMessage[]) => void
   setFirstUnreadId: (value: number | null) => void
-  setClients: (value: ClientOption[]) => void
-  setWorkers: (value: WorkerOption[]) => void
-  setAssignClientId: (value: number | null) => void
-  setAssignWorkerId: (value: number | null) => void
 }
 
 export function useChatBootstrap({
@@ -37,20 +23,20 @@ export function useChatBootstrap({
   conversationId,
   reconnectPhaseStartedAtRef,
   forceScrollOnNextRenderRef,
-  setConnectionError,
-  setIsReconnectingNow,
-  setReconnectIn,
   setError,
-  setMyId,
-  setConversations,
-  setSelectedConversation,
-  setMessages,
   setFirstUnreadId,
-  setClients,
-  setWorkers,
-  setAssignClientId,
-  setAssignWorkerId,
 }: UseChatBootstrapParams) {
+  const setConnectionError = useChatStore((state) => state.setConnectionError)
+  const setIsReconnectingNow = useChatStore((state) => state.setIsReconnectingNow)
+  const setReconnectIn = useChatStore((state) => state.setReconnectIn)
+  const setMyId = useChatStore((state) => state.setMyId)
+  const setConversations = useChatStore((state) => state.setConversations)
+  const setSelectedConversation = useChatStore((state) => state.setSelectedConversation)
+  const setMessages = useChatStore((state) => state.setMessages)
+  const setClients = useChatStore((state) => state.setClients)
+  const setWorkers = useChatStore((state) => state.setWorkers)
+  const setAssignClientId = useChatStore((state) => state.setAssignClientId)
+  const setAssignWorkerId = useChatStore((state) => state.setAssignWorkerId)
   useEffect(() => {
     if (!token) return
     let cancelled = false

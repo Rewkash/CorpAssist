@@ -1,19 +1,12 @@
 import type { MutableRefObject } from 'react'
 import { getClientConversationHistory, getConversations, getMessages, markMessagesRead, takeConversation } from '../../../api'
-import type { ChatMessage, Conversation } from '../../../api'
 import type { Role } from '../../../store'
-
-type SetState<T> = (value: T | ((prev: T) => T)) => void
+import { useChatStore } from '../store/chatStore'
 
 type UseTakeConversationParams = {
   token: string
   role: Role | null
-  myId: number | null
   setConversationId: (id: number | null) => void
-  setConversations: SetState<Conversation[]>
-  setSelectedConversation: SetState<Conversation | null>
-  setClientHistory: SetState<Conversation[]>
-  setMessages: SetState<ChatMessage[]>
   setFirstUnreadId: (id: number | null) => void
   forceScrollOnNextRenderRef: MutableRefObject<boolean>
   setError: (message: string) => void
@@ -22,16 +15,17 @@ type UseTakeConversationParams = {
 export function useTakeConversation({
   token,
   role,
-  myId,
   setConversationId,
-  setConversations,
-  setSelectedConversation,
-  setClientHistory,
-  setMessages,
   setFirstUnreadId,
   forceScrollOnNextRenderRef,
   setError,
 }: UseTakeConversationParams) {
+  const myId = useChatStore((state) => state.myId)
+  const setConversations = useChatStore((state) => state.setConversations)
+  const setSelectedConversation = useChatStore((state) => state.setSelectedConversation)
+  const setClientHistory = useChatStore((state) => state.setClientHistory)
+  const setMessages = useChatStore((state) => state.setMessages)
+
   const takeSelectedConversation = async (id: number) => {
     if (!token) return
     try {

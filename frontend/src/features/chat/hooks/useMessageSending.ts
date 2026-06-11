@@ -1,9 +1,7 @@
 import type { MutableRefObject } from 'react'
 import { getConversations, getMessages, markMessagesRead, sendMessage, startConversation } from '../../../api'
-import type { ChatMessage, Conversation } from '../../../api'
 import type { Role } from '../../../store'
-
-type SetState<T> = (value: T | ((prev: T) => T)) => void
+import { useChatStore } from '../store/chatStore'
 
 type UseMessageSendingParams = {
   auth: {
@@ -16,8 +14,6 @@ type UseMessageSendingParams = {
   conversation: {
     conversationId: number | null
     setConversationId: (id: number | null) => void
-    setSelectedConversation: SetState<Conversation | null>
-    setConversations: SetState<Conversation[]>
   }
   composer: {
     text: string
@@ -27,9 +23,6 @@ type UseMessageSendingParams = {
     setAssistHint: (message: string) => void
     setReplySuggestions: (suggestions: string[]) => void
   }
-  messages: {
-    setMessages: SetState<ChatMessage[]>
-  }
   scroll: {
     clearUnreadDividerSmooth: () => void
     forceScrollOnNextRenderRef: MutableRefObject<boolean>
@@ -37,29 +30,33 @@ type UseMessageSendingParams = {
   }
 }
 
-export function useMessageSending({ auth, guards, conversation, composer, messages, scroll }: UseMessageSendingParams) {
+export function useMessageSending({ auth, guards, conversation, composer, scroll }: UseMessageSendingParams) {
+  const setSelectedConversation = useChatStore((state) => state.setSelectedConversation)
+  const setConversations = useChatStore((state) => state.setConversations)
+  const setMessages = useChatStore((state) => state.setMessages)
+
   const ensureTargetConversation = async () => {
     let targetConversationId = conversation.conversationId
     if (!targetConversationId && auth.role === 'client') {
       const createdConversation = await startConversation(auth.token)
       targetConversationId = createdConversation.id
       conversation.setConversationId(createdConversation.id)
-      conversation.setSelectedConversation(createdConversation)
+      setSelectedConversation(createdConversation)
       const list = await getConversations(auth.token)
-      conversation.setConversations(list)
+      setConversations(list)
     }
     return targetConversationId
   }
 
   const synchronizeSentMessage = async (targetConversationId: number, outgoingText: string) => {
     const item = await sendMessage(auth.token, targetConversationId, outgoingText)
-    messages.setMessages((prev) => [...prev, item])
+    setMessages((prev) => [...prev, item])
     scroll.clearUnreadDividerSmooth()
     composer.setText('')
     composer.setReplySuggestions([])
     const items = await getMessages(auth.token, targetConversationId)
     scroll.forceScrollOnNextRenderRef.current = true
-    messages.setMessages(items)
+    setMessages(items)
     if (scroll.isAtBottomRef.current) {
       await markMessagesRead(auth.token, targetConversationId)
     }

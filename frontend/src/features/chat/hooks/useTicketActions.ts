@@ -1,18 +1,12 @@
 import { closeConversation, getConversations, getMessages, sendMessage } from '../../../api'
-import type { ChatMessage, Conversation } from '../../../api'
 import type { Role } from '../../../store'
-
-type SetState<T> = (value: T | ((prev: T) => T)) => void
+import { useChatStore } from '../store/chatStore'
 
 type UseTicketActionsParams = {
   token: string
   role: Role | null
   conversationId: number | null
   setConversationId: (id: number | null) => void
-  setConversations: SetState<Conversation[]>
-  setSelectedConversation: SetState<Conversation | null>
-  setClientHistory: SetState<Conversation[]>
-  setMessages: SetState<ChatMessage[]>
   setFirstUnreadId: (id: number | null) => void
   setText: (value: string) => void
   setReplySuggestions: (suggestions: string[]) => void
@@ -25,16 +19,17 @@ export function useTicketActions({
   role,
   conversationId,
   setConversationId,
-  setConversations,
-  setSelectedConversation,
-  setClientHistory,
-  setMessages,
   setFirstUnreadId,
   setText,
   setReplySuggestions,
   setError,
   setAssistHint,
 }: UseTicketActionsParams) {
+  const setConversations = useChatStore((state) => state.setConversations)
+  const setSelectedConversation = useChatStore((state) => state.setSelectedConversation)
+  const setClientHistory = useChatStore((state) => state.setClientHistory)
+  const setMessages = useChatStore((state) => state.setMessages)
+
   const closeTicket = async () => {
     if (!token || !conversationId) return
     if (role !== 'worker' && role !== 'admin') {

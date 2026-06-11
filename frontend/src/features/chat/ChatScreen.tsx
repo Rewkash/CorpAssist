@@ -37,8 +37,6 @@ export function ChatScreen() {
   const composer = useComposerState()
   const reconnectPhaseStartedAtRef = useRef<number | null>(null)
   const messages = useChatStore((state) => state.messages)
-  const conversations = useChatStore((state) => state.conversations)
-  const selectedConversation = useChatStore((state) => state.selectedConversation)
   const clientHistory = useChatStore((state) => state.clientHistory)
   const clients = useChatStore((state) => state.clients)
   const workers = useChatStore((state) => state.workers)
@@ -48,16 +46,8 @@ export function ChatScreen() {
   const isReconnectingNow = useChatStore((state) => state.isReconnectingNow)
   const assignClientId = useChatStore((state) => state.assignClientId)
   const assignWorkerId = useChatStore((state) => state.assignWorkerId)
-  const setMessages = useChatStore((state) => state.setMessages)
   const appendMessageIfMissing = useChatStore((state) => state.appendMessageIfMissing)
-  const setConversations = useChatStore((state) => state.setConversations)
   const setConversationsSnapshot = useChatStore((state) => state.setConversationsSnapshot)
-  const setSelectedConversation = useChatStore((state) => state.setSelectedConversation)
-  const updateSelectedConversation = useChatStore((state) => state.updateSelectedConversation)
-  const setClientHistory = useChatStore((state) => state.setClientHistory)
-  const setClients = useChatStore((state) => state.setClients)
-  const setWorkers = useChatStore((state) => state.setWorkers)
-  const setMyId = useChatStore((state) => state.setMyId)
   const setConnectionError = useChatStore((state) => state.setConnectionError)
   const setReconnectIn = useChatStore((state) => state.setReconnectIn)
   const setIsReconnectingNow = useChatStore((state) => state.setIsReconnectingNow)
@@ -131,10 +121,6 @@ export function ChatScreen() {
     error,
   })
 
-  const handleSelectedConversationUpdate = useCallback((conversation: Conversation) => {
-    updateSelectedConversation(conversation)
-  }, [updateSelectedConversation])
-
   const handleHistoryError = useCallback((message: string) => {
     setError(message)
   }, [])
@@ -142,9 +128,6 @@ export function ChatScreen() {
   useConversationHistory({
     token,
     conversationId,
-    selectedConversation,
-    conversations,
-    onSelectedConversationUpdate: handleSelectedConversationUpdate,
     onError: handleHistoryError,
   })
 
@@ -154,19 +137,8 @@ export function ChatScreen() {
     conversationId,
     reconnectPhaseStartedAtRef,
     forceScrollOnNextRenderRef,
-    setConnectionError,
-    setIsReconnectingNow,
-    setReconnectIn,
     setError,
-    setMyId,
-    setConversations,
-    setSelectedConversation,
-    setMessages,
     setFirstUnreadId,
-    setClients,
-    setWorkers,
-    setAssignClientId,
-    setAssignWorkerId,
   })
 
   const hideTagDropdown = useCallback(() => {
@@ -183,10 +155,6 @@ export function ChatScreen() {
     activeTags,
   } = useChatViewModel({
     conversationId,
-    conversations,
-    clientHistory,
-    selectedConversation,
-    clients,
     role,
     email,
     search,
@@ -198,8 +166,6 @@ export function ChatScreen() {
     conversation: {
       conversationId,
       setConversationId,
-      setSelectedConversation,
-      setConversations,
     },
     composer: {
       text,
@@ -209,7 +175,6 @@ export function ChatScreen() {
       setAssistHint,
       setReplySuggestions,
     },
-    messages: { setMessages },
     scroll: {
       clearUnreadDividerSmooth,
       forceScrollOnNextRenderRef,
@@ -234,12 +199,7 @@ export function ChatScreen() {
   const { takeSelectedConversation } = useTakeConversation({
     token,
     role,
-    myId,
     setConversationId,
-    setConversations,
-    setSelectedConversation,
-    setClientHistory,
-    setMessages,
     setFirstUnreadId,
     forceScrollOnNextRenderRef,
     setError,
@@ -247,9 +207,6 @@ export function ChatScreen() {
 
   const { assignSelectedWorker } = useWorkerAssignment({
     token,
-    assignClientId,
-    assignWorkerId,
-    setClients,
     setError,
   })
 
@@ -258,9 +215,6 @@ export function ChatScreen() {
     conversationId,
     role,
     activeTags,
-    setConversations,
-    setSelectedConversation,
-    setClientHistory,
     setError,
   })
 
@@ -269,10 +223,6 @@ export function ChatScreen() {
     role,
     conversationId,
     setConversationId,
-    setConversations,
-    setSelectedConversation,
-    setClientHistory,
-    setMessages,
     setFirstUnreadId,
     setText,
     setReplySuggestions,
