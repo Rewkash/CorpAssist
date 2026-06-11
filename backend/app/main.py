@@ -37,7 +37,8 @@ app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(assist.router)
 app.include_router(chat.router)
-app.include_router(debug_llm.router)
+if settings.enable_llm_debug:
+    app.include_router(debug_llm.router)
 
 
 chat_socket_hub = ChatSocketHub()

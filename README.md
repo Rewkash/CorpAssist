@@ -53,6 +53,18 @@ python init_demo.py
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+LLM debug routes are disabled by default. Enable them only for local/dev:
+
+```powershell
+$env:ENABLE_LLM_DEBUG="true"
+```
+
+or in `backend/.env`:
+
+```env
+ENABLE_LLM_DEBUG=true
+```
+
 ### Миграции БД
 
 Локальная БД:

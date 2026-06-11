@@ -31,13 +31,14 @@ def _fake_sentiment_pipeline(*args, **kwargs):
     return analyze
 
 
-def _configure_test_environment() -> None:
+def _configure_test_environment(*, enable_llm_debug: bool = False) -> None:
     os.environ['POSTGRES_DB'] = 'corpassist_test'
     os.environ['POSTGRES_HOST'] = 'localhost'
     os.environ['POSTGRES_PORT'] = '5432'
     os.environ['POSTGRES_USER'] = 'corpassist'
     os.environ['POSTGRES_PASSWORD'] = 'corpassist'
     os.environ['JWT_SECRET'] = 'test-secret'
+    os.environ['ENABLE_LLM_DEBUG'] = 'true' if enable_llm_debug else 'false'
     os.environ.setdefault('OLLAMA_BASE_URL', 'http://localhost:11434')
 
 
@@ -64,14 +65,36 @@ async def _clean_database(AsyncSessionLocal) -> None:
         await session.commit()
 
 
-@pytest.fixture
-async def client() -> AsyncIterator[AsyncClient]:
+def _load_app_modules(*, enable_llm_debug: bool = False):
     _clear_app_modules()
-    _configure_test_environment()
+    _configure_test_environment(enable_llm_debug=enable_llm_debug)
     _install_fake_transformers()
 
     database = import_module('app.database')
     main = import_module('app.main')
+    return database, main
+
+
+@pytest.fixture
+async def app_loader() -> AsyncIterator:
+    loaded_databases = []
+
+    def load(*, enable_llm_debug: bool = False):
+        database, main = _load_app_modules(enable_llm_debug=enable_llm_debug)
+        loaded_databases.append(database)
+        return main
+
+    try:
+        yield load
+    finally:
+        for database in loaded_databases:
+            await database.engine.dispose()
+        _clear_app_modules()
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[AsyncClient]:
+    database, main = _load_app_modules()
 
     try:
         async with main.app.router.lifespan_context(main.app):

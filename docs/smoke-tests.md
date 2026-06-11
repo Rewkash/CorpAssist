@@ -100,6 +100,7 @@ in place.
 
 ## Debug LLM
 
+- [ ] Set `ENABLE_LLM_DEBUG=true` before backend startup in local/dev only.
 - [ ] Open `GET /debug/llm`.
 - [ ] Confirm page renders.
 - [ ] Check model status.

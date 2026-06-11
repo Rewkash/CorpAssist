@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     ollama_base_url: str = 'http://ollama:11434'
     ollama_model: str = 'gemma3:4b'
+    enable_llm_debug: bool = False
 
     @property
     def database_url(self) -> str:
