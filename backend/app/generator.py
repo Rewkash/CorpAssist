@@ -2,7 +2,6 @@ import logging
 import asyncio
 from collections import deque
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 import textwrap
 
@@ -10,6 +9,7 @@ import httpx
 
 from app.config import settings
 from app.llm.fallbacks import fallback_improve, fallback_replies
+from app.llm.model_store import clear_saved_model, load_saved_model, save_model
 from app.parsers.llm_responses import parse_reply_variants, strip_intro
 from app.prompts.llm_prompts import (
     SYSTEM_PROMPT_IMPROVE,
@@ -20,7 +20,6 @@ from app.schemas import AnalysisResult
 
 logger = logging.getLogger(__name__)
 LLM_DEBUG_LOG: deque[dict[str, Any]] = deque(maxlen=100)
-RUNTIME_MODEL_FILE = Path(__file__).resolve().parents[1] / '.runtime_ollama_model'
 
 
 def get_llm_debug_log() -> list[dict[str, Any]]:
@@ -187,30 +186,11 @@ class OllamaClient:
 
 class BusinessTextGenerator:
     def __init__(self) -> None:
-        self._llm = OllamaClient(settings.ollama_base_url, self._load_saved_model())
+        self._llm = OllamaClient(settings.ollama_base_url, load_saved_model())
         self._model_lock = asyncio.Lock()
         self._model_loading = False
         self._model_status = 'ready'
         self._model_switch_task: asyncio.Task[Any] | None = None
-
-    @staticmethod
-    def _load_saved_model() -> str:
-        try:
-            saved_model = RUNTIME_MODEL_FILE.read_text(encoding='utf-8').strip()
-            return saved_model or settings.ollama_model
-        except OSError:
-            return settings.ollama_model
-
-    @staticmethod
-    def _save_model(model: str) -> None:
-        RUNTIME_MODEL_FILE.write_text(model.strip(), encoding='utf-8')
-
-    @staticmethod
-    def _clear_saved_model() -> None:
-        try:
-            RUNTIME_MODEL_FILE.unlink()
-        except OSError:
-            pass
 
     @property
     def model(self) -> str:
@@ -262,7 +242,7 @@ class BusinessTextGenerator:
                 self._model_status = f'Загружается модель {target}'
                 self._llm.set_model(target)
                 await self._llm.preload_model(target)
-                self._save_model(target)
+                save_model(target)
                 self._model_status = f'Модель {target} готова'
             except asyncio.CancelledError:
                 self._model_status = f'Загрузка модели {target} остановлена'
@@ -295,7 +275,7 @@ class BusinessTextGenerator:
                     await self._llm.unload_model(current)
                 except Exception:
                     logger.exception('Failed to unload current model during cancel')
-            self._clear_saved_model()
+            clear_saved_model()
             self._model_status = 'Загрузка остановлена, модель выгружена, выбор очищен'
 
     async def list_models(self) -> list[str]:
