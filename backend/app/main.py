@@ -5,12 +5,12 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import decode_access_token
 from app.config import settings
-from app.database import AsyncSessionLocal, Base, engine
+from app.database import AsyncSessionLocal
 from app.generator import generator_service
 from app.models import Conversation, User
 from app.nlp import nlp_service
@@ -22,23 +22,6 @@ from app.services.conversation_access import get_accessible_conversation
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'client'"))
-        await conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS assigned_worker_id INTEGER'))
-        await conn.execute(text('ALTER TABLE conversations ALTER COLUMN worker_id DROP NOT NULL'))
-        await conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'open'"))
-        await conn.execute(text('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ NULL'))
-        await conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT '[]'"))
-        await conn.execute(text('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS tags_generated BOOLEAN DEFAULT FALSE'))
-        await conn.execute(text('ALTER TABLE conversations ADD COLUMN IF NOT EXISTS priority_at TIMESTAMPTZ NULL'))
-        await conn.execute(text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'sent'"))
-        await conn.execute(text('ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ NULL'))
-        await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_chat_messages_status ON chat_messages (status)'))
-        await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_conversations_status ON conversations (status)'))
-        await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_conversations_priority_at ON conversations (priority_at)'))
-        await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_users_role ON users (role)'))
-        await conn.execute(text('CREATE INDEX IF NOT EXISTS ix_users_assigned_worker_id ON users (assigned_worker_id)'))
     yield
 
 
