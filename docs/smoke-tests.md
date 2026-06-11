@@ -5,14 +5,41 @@ Use this checklist after backend refactors, dependency changes, or local infrast
 ## Prerequisites
 
 - PostgreSQL, Redis, and Ollama are running or intentionally unavailable for degraded checks.
+- Database migrations were applied with `alembic upgrade head`.
 - Backend is started with local environment values.
 - Frontend is started and points to the backend.
 
 ## Backend startup
 
+- [ ] Run `cd backend` and `.\.venv\Scripts\alembic.exe upgrade head`.
 - [ ] Start backend without import errors.
-- [ ] Confirm startup finishes and database bootstrap completes.
+- [ ] Confirm startup finishes without schema mutation errors.
 - [ ] Confirm no unexpected traceback appears in logs.
+
+## Existing database inspection before stamping
+
+Run these before `alembic stamp head` on an existing dev DB:
+
+```powershell
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d users"
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d conversations"
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d chat_messages"
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d message_history"
+```
+
+Stamp only if the schema matches the Alembic baseline:
+
+```powershell
+cd backend
+.\.venv\Scripts\alembic.exe stamp 20260610_0001
+.\.venv\Scripts\alembic.exe upgrade head
+cd ..
+```
+
+Do not run the baseline upgrade against an existing DB that already has these
+tables. `20260610_0002` reconciles known legacy dev schema drift after the DB is
+stamped at `20260610_0001`. Legacy extra `ix_*_id` indexes are intentionally left
+in place.
 
 ## Health
 

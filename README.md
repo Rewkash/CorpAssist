@@ -17,7 +17,7 @@
 - Frontend: React 18, Vite, Tailwind CSS, Zustand
 - Backend: FastAPI (Python 3.11), WebSocket, JWT
 - NLP/ML: spaCy, Hugging Face Transformers, PyTorch, fallback-генерация
-- Data: PostgreSQL, Redis
+- Data: PostgreSQL, Redis, Alembic migrations
 - Infra: Docker, Docker Compose
 
 ## Быстрый старт
@@ -48,8 +48,52 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+### Миграции БД
+
+Локальная БД:
+
+```powershell
+cd backend
+.\.venv\Scripts\alembic.exe upgrade head
+cd ..
+```
+
+Тестовая БД:
+
+```powershell
+$env:POSTGRES_DB="corpassist_test"
+$env:POSTGRES_HOST="localhost"
+$env:POSTGRES_PORT="5432"
+$env:POSTGRES_USER="corpassist"
+$env:POSTGRES_PASSWORD="corpassist"
+cd backend
+.\.venv\Scripts\alembic.exe upgrade head
+cd ..
+& "backend\.venv\Scripts\pytest.exe"
+```
+
+Existing dev DB можно помечать как актуальную только после inspection схемы:
+
+```powershell
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d users"
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d conversations"
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d chat_messages"
+docker compose exec postgres psql -U corpassist -d corpassist -c "\d message_history"
+cd backend
+.\.venv\Scripts\alembic.exe current
+.\.venv\Scripts\alembic.exe stamp 20260610_0001
+.\.venv\Scripts\alembic.exe upgrade head
+cd ..
+```
+
+Не запускайте baseline migration на existing DB, где таблицы уже созданы.
+Сначала проверьте схему, затем используйте `stamp 20260610_0001`, после чего
+`upgrade head` применит reconcile migration для known legacy drift. Лишние legacy
+индексы `ix_*_id` не удаляются автоматически.
 
 ### Frontend
 
