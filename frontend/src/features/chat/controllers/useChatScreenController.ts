@@ -1,11 +1,16 @@
 import { useCallback, useState } from 'react'
 
 import { useAssistStore } from '../../../store'
-import { FREQUENT_TAGS } from '../chatConstants'
 import type { ChatLayoutProps } from '../chatScreenTypes'
 import { useChatViewModel } from '../hooks/useChatViewModel'
 import { useComposerState } from '../hooks/useComposerState'
 import { useConversationHistory } from '../hooks/useConversationHistory'
+import {
+  buildChatCenterPanelProps,
+  buildChatLayoutProps,
+  buildChatSidebarPanelProps,
+  buildConversationPanelProps,
+} from './buildChatScreenProps'
 import { useComposerWorkflowController } from './useComposerWorkflowController'
 import { useChatRuntimeController } from './useChatRuntimeController'
 import { useSidebarWorkflowController } from './useSidebarWorkflowController'
@@ -86,91 +91,23 @@ export function useChatScreenController(): ChatLayoutProps {
     setAssistHint: composer.setAssistHint,
   })
 
-  const conversationProps = {
-    email: auth.email,
-    role: auth.role,
-    search: sidebar.search,
-    conversations: viewModel.filteredConversations,
-    conversationId: auth.conversationId,
-    onSearchChange: sidebar.setSearch,
-    onTakeConversation: ticketWorkflow.takeSelectedConversation,
-    onLogout: auth.logout,
+  const sharedPanelContext = {
+    auth,
+    sidebar,
+    viewModel,
+    tickets: ticketWorkflow,
   }
 
-  const centerProps = {
-    mobileMode: sidebar.mobileMode,
-    activeConversation: viewModel.activeConversation,
-    role: auth.role,
-    conversationId: auth.conversationId,
+  return buildChatLayoutProps({
     rightCollapsed: sidebar.rightCollapsed,
-    messages: runtime.messages,
-    myId: runtime.myId,
-    firstUnreadId: runtime.scroll.firstUnreadId,
-    isUnreadDividerHiding: runtime.scroll.isUnreadDividerHiding,
-    messagesRef: runtime.scroll.messagesRef,
-    bottomPanelRef: runtime.scroll.bottomPanelRef,
-    showJumpDown: runtime.scroll.showJumpDown,
-    jumpBottomOffset: runtime.scroll.jumpBottomOffset,
-    newMessagesCount: runtime.scroll.newMessagesCount,
-    isActiveConversationClosed: viewModel.isActiveConversationClosed,
-    text: composer.text,
-    busy: composer.busy,
-    assistBusy: composer.assistBusy,
-    generatingStatus: composer.generatingStatus,
-    replySuggestions: composer.replySuggestions,
-    connectionError: runtime.connectionError,
-    isReconnectingNow: runtime.isReconnectingNow,
-    reconnectIn: runtime.reconnectIn,
-    error,
-    assistHint: composer.assistHint,
-    onCreateClientConversation: ticketWorkflow.createClientConversation,
-    onCloseTicket: ticketWorkflow.closeTicket,
-    onTransferTicket: ticketWorkflow.transferTicket,
-    onToggleRightCollapsed: () => sidebar.setRightCollapsed((value) => !value),
-    onMessagesScroll: runtime.scroll.handleMessagesScroll,
-    onJumpToBottom: runtime.scroll.jumpToBottom,
-    onSuggest: composerWorkflow.onSuggest,
-    onImprove: composerWorkflow.onImprove,
-    onSend: composerWorkflow.onSend,
-    onTextChange: composerWorkflow.onTextChange,
-    onTextKeyDown: composerWorkflow.onTextKeyDown,
-    onHideSuggestions: composerWorkflow.onHideSuggestions,
-    onSelectSuggestion: composerWorkflow.onSelectSuggestion,
-  }
-
-  const sidebarProps = {
-    mobileMode: sidebar.mobileMode,
-    activeConversation: viewModel.activeConversation,
-    activeClientEmail: viewModel.activeClientEmail,
-    clientHistory: sidebar.clientHistory,
-    conversationId: auth.conversationId,
-    role: auth.role,
-    activeTags: viewModel.activeTags,
-    suggestedTags: sidebar.suggestedTags,
-    frequentTags: FREQUENT_TAGS,
-    manualTag: sidebar.manualTag,
-    showTagDropdown: sidebar.showTagDropdown,
-    tagDropdownRef: sidebar.tagDropdownRef,
-    assignClientId: sidebar.assignClientId,
-    assignWorkerId: sidebar.assignWorkerId,
-    clients: sidebar.clients,
-    workers: sidebar.workers,
-    onTakeConversation: ticketWorkflow.takeSelectedConversation,
-    onTogglePriority: ticketWorkflow.togglePriority,
-    onAddTag: ticketWorkflow.addTag,
-    onRemoveTag: ticketWorkflow.removeTag,
-    onManualTagChange: sidebar.setManualTag,
-    onShowTagDropdown: sidebar.onShowTagDropdown,
-    onHideTagDropdown: sidebar.onHideTagDropdown,
-    onAssignClientId: sidebar.setAssignClientId,
-    onAssignWorkerId: sidebar.setAssignWorkerId,
-    onAssignWorker: ticketWorkflow.assignSelectedWorker,
-  }
-
-  return {
-    rightCollapsed: sidebar.rightCollapsed,
-    conversation: conversationProps,
-    center: centerProps,
-    sidebar: sidebarProps,
-  }
+    conversation: buildConversationPanelProps(sharedPanelContext),
+    center: buildChatCenterPanelProps({
+      ...sharedPanelContext,
+      composer,
+      composerWorkflow,
+      error,
+      runtime,
+    }),
+    sidebar: buildChatSidebarPanelProps(sharedPanelContext),
+  })
 }
