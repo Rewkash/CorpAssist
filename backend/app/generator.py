@@ -8,6 +8,7 @@ from app.llm.fallbacks import fallback_improve, fallback_replies
 from app.llm.model_store import clear_saved_model, load_saved_model, save_model
 from app.llm.ollama_client import OllamaClient, get_llm_debug_log
 from app.parsers.llm_responses import parse_reply_variants, strip_intro
+from app.parsers.tag_suggestions import empty_tag_suggestions, parse_tag_suggestions, tag_suggestion_schema
 from app.prompts.llm_prompts import (
     SYSTEM_PROMPT_IMPROVE,
     SYSTEM_PROMPT_REPLY,
@@ -183,40 +184,21 @@ class BusinessTextGenerator:
 
     async def suggest_tags(self, conversation_text: str) -> dict[str, Any]:
         user_prompt = f'Текст диалога:\n\n{conversation_text[:4000]}'
-        schema = {
-            'type': 'object',
-            'properties': {
-                'auto_tags': {'type': 'array', 'items': {'type': 'string'}},
-                'suggested_tags': {'type': 'array', 'items': {'type': 'string'}},
-                'priority': {'type': 'boolean'},
-            },
-            'required': ['auto_tags', 'suggested_tags', 'priority'],
-        }
 
         for _ in range(2):
             try:
                 raw = await self._llm.generate_structured(
                     system_prompt=SYSTEM_PROMPT_TAGS,
                     user_prompt=user_prompt,
-                    schema=schema,
+                    schema=tag_suggestion_schema(),
                     temperature=0.1,
                     max_tokens=200,
                     mode='suggest_tags',
                 )
-                import json
-
-                parsed = json.loads(raw)
-                auto_tags = [str(tag).strip().capitalize() for tag in parsed.get('auto_tags', []) if str(tag).strip()][:2]
-                suggested_tags = [str(tag).strip().capitalize() for tag in parsed.get('suggested_tags', []) if str(tag).strip()][:2]
-                priority = bool(parsed.get('priority', False))
-                return {
-                    'auto_tags': auto_tags,
-                    'suggested_tags': suggested_tags,
-                    'priority': priority,
-                }
+                return parse_tag_suggestions(raw)
             except Exception:
                 logger.exception('Ollama suggest_tags failed, retry/fallback')
 
-        return {'auto_tags': [], 'suggested_tags': [], 'priority': False}
+        return empty_tag_suggestions()
 
 generator_service = BusinessTextGenerator()
