@@ -7,6 +7,7 @@ from app.config import settings
 from app.llm.fallbacks import fallback_improve, fallback_replies
 from app.llm.model_store import clear_saved_model, load_saved_model, save_model
 from app.llm.ollama_client import OllamaClient, get_llm_debug_log
+from app.parsers.draft_improvement import is_acceptable_improvement
 from app.parsers.llm_responses import parse_reply_variants, strip_intro
 from app.parsers.tag_suggestions import empty_tag_suggestions, parse_tag_suggestions, tag_suggestion_schema
 from app.prompts.llm_prompts import (
@@ -17,18 +18,6 @@ from app.prompts.llm_prompts import (
 from app.schemas import AnalysisResult
 
 logger = logging.getLogger(__name__)
-
-MORALIZING_MARKERS = (
-    'не вправе',
-    'неуместно',
-    'конструктивно',
-    'нельзя писать',
-    'пожалуйста, попробуйте',
-    'приносим свои извинения за ненормативную лексику',
-    'мы понимаем, что вы испытываете',
-    'опишите вашу проблему более подробно',
-)
-
 
 class BusinessTextGenerator:
     def __init__(self) -> None:
@@ -171,9 +160,7 @@ class BusinessTextGenerator:
                     mode='improve_draft',
                 )
                 improved = strip_intro(improved)
-                low = improved.lower()
-                has_moral = any(marker in low for marker in MORALIZING_MARKERS)
-                if len(improved) > 10 and not has_moral:
+                if is_acceptable_improvement(improved):
                     return improved
                 if attempt == 0:
                     user_prompt = f'{user_prompt}\n\nНапоминание: верни только переписанный текст без комментариев.'
