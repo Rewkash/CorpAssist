@@ -27,6 +27,36 @@ services:
       retries: 20
       start_period: 3s
 
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - '11434:11434'
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  ollama-pull:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      sh -c "curl -sf http://ollama:11434/api/pull -d '{\"name\": \"gemma3:4b\"}'"
+
   backend:
     build:
       context: ./backend
@@ -38,10 +68,14 @@ services:
       POSTGRES_PORT: 5432
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: super-secret-demo-key
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: gemma3:4b
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      ollama:
         condition: service_healthy
     ports:
       - '8000:8000'
@@ -61,3 +95,4 @@ services:
 
 volumes:
   postgres_data:
+  ollama_data:

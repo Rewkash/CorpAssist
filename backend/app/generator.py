@@ -1,64 +1,129 @@
+import logging
+from typing import Any
 import textwrap
 
+from app.config import settings
+from app.llm.fallbacks import fallback_improve, fallback_replies
+from app.llm.model_lifecycle import ModelLifecycleManager
+from app.llm.model_store import load_saved_model
+from app.llm.ollama_client import OllamaClient, get_llm_debug_log
+from app.parsers.draft_improvement import is_acceptable_improvement
+from app.parsers.llm_responses import parse_reply_variants, strip_intro
+from app.parsers.tag_suggestions import empty_tag_suggestions, parse_tag_suggestions, tag_suggestion_schema
+from app.prompts.llm_prompts import (
+    SYSTEM_PROMPT_IMPROVE,
+    SYSTEM_PROMPT_REPLY,
+    SYSTEM_PROMPT_TAGS,
+)
 from app.schemas import AnalysisResult
 
+logger = logging.getLogger(__name__)
 
 class BusinessTextGenerator:
+    def __init__(self) -> None:
+        self._llm = OllamaClient(settings.ollama_base_url, load_saved_model())
+        self._lifecycle = ModelLifecycleManager(self._llm)
+
+    @property
+    def model(self) -> str:
+        return self._lifecycle.model
+
+    def set_model(self, model: str) -> None:
+        self._lifecycle.set_model(model)
+
+    async def unload_current_model(self) -> None:
+        await self._lifecycle.unload_current_model()
+
+    @property
+    def model_loading(self) -> bool:
+        return self._lifecycle.model_loading
+
+    @property
+    def model_status(self) -> str:
+        return self._lifecycle.model_status
+
+    def ensure_ready(self) -> None:
+        self._lifecycle.ensure_ready()
+
+    async def switch_model(self, model: str) -> None:
+        await self._lifecycle.switch_model(model)
+
+    async def cancel_loading_and_clear(self) -> None:
+        await self._lifecycle.cancel_loading_and_clear()
+
+    async def list_models(self) -> list[str]:
+        return await self._lifecycle.list_models()
+
     async def suggest_replies(self, incoming_text: str, analysis: AnalysisResult, context: str = '') -> list[str]:
-        topic_hint = ', '.join(analysis.topics[:3])
-        base = incoming_text.strip().replace('\n', ' ')
-        short_base = textwrap.shorten(base, width=180, placeholder='...')
+        context_block = ''
+        if context.strip():
+            short_context = textwrap.shorten(context, width=300, placeholder='...')
+            context_block = f'Контекст предыдущего общения:\n{short_context}\n\n'
 
-        context_line = (
-            f'Ранее по этому клиенту обсуждали: {textwrap.shorten(context, width=140, placeholder="...")}. '
-            if context.strip()
-            else ''
-        )
+        user_prompt = f'{context_block}Последнее сообщение клиента:\n{incoming_text.strip()}'
 
-        return [
-            (
-                context_line
-                + 'Благодарю за сообщение. Подтверждаю получение информации по вопросу '
-                f'({topic_hint}). Мы проанализируем детали и вернемся с ответом до конца дня.'
-            ),
-            (
-                'Спасибо за уточнение. По теме '
-                f'"{topic_hint}" предлагаю согласовать следующие шаги: 1) подтвердить требования, '
-                '2) зафиксировать сроки, 3) назначить ответственных. Готов обсудить детали.'
-            ),
-            (
-                'Принял ваше сообщение в работу. Для ускорения решения, пожалуйста, подтвердите, '
-                f'корректно ли мы понимаем запрос: "{short_base}". После подтверждения сразу приступим к исполнению.'
-            ),
-        ]
+        for _ in range(2):
+            try:
+                raw = await self._llm.generate(
+                    system_prompt=SYSTEM_PROMPT_REPLY,
+                    user_prompt=user_prompt,
+                    temperature=0.7,
+                    max_tokens=600,
+                    mode='suggest_replies',
+                )
+                cleaned = strip_intro(raw)
+                variants = parse_reply_variants(cleaned)
+                if len(variants) >= 2:
+                    return variants[:3]
+            except Exception:
+                logger.exception('Ollama suggest_replies failed, retry/fallback')
 
-    async def improve_draft(self, draft: str, analysis: AnalysisResult) -> str:
-        text = draft.strip()
-        replacements = {
-            'привет': 'Добрый день',
-            'ок': 'Хорошо',
-            'щас': 'в ближайшее время',
-            'сорян': 'Приношу извинения',
-            'надо': 'необходимо',
-            'типа': '',
-        }
+        return fallback_replies(incoming_text, analysis, context)
 
-        improved = text
-        for src, dst in replacements.items():
-            improved = improved.replace(src, dst).replace(src.capitalize(), dst)
+    async def improve_draft(self, draft: str, analysis: AnalysisResult, context: str = '') -> str:
+        context_block = ''
+        if context.strip():
+            short_context = textwrap.shorten(context, width=3000, placeholder='...')
+            context_block = f'Контекст диалога только для понимания темы. Не переписывай его и не отвечай на него:\n{short_context}\n\n'
 
-        if not improved.endswith('.'):
-            improved += '.'
+        user_prompt = f'{context_block}Черновик оператора для улучшения:\n\n{draft.strip()}'
 
-        if analysis.formality != 'high':
-            improved = (
-                'Коллеги, ' + improved[0].lower() + improved[1:]
-                if improved and improved[0].isalpha()
-                else 'Коллеги, ' + improved
-            )
+        for attempt in range(2):
+            try:
+                improved = await self._llm.generate(
+                    system_prompt=SYSTEM_PROMPT_IMPROVE,
+                    user_prompt=user_prompt,
+                    temperature=0.3,
+                    max_tokens=512,
+                    mode='improve_draft',
+                )
+                improved = strip_intro(improved)
+                if is_acceptable_improvement(improved):
+                    return improved
+                if attempt == 0:
+                    user_prompt = f'{user_prompt}\n\nНапоминание: верни только переписанный текст без комментариев.'
+            except Exception:
+                logger.exception('Ollama improve_draft failed, retry/fallback')
 
-        improved = improved.replace('  ', ' ').strip()
-        return improved
+        return fallback_improve(draft)
 
+    async def suggest_tags(self, conversation_text: str) -> dict[str, Any]:
+        user_prompt = f'Текст диалога:\n\n{conversation_text[:4000]}'
+
+        for _ in range(2):
+            try:
+                raw = await self._llm.generate_structured(
+                    system_prompt=SYSTEM_PROMPT_TAGS,
+                    user_prompt=user_prompt,
+                    schema=tag_suggestion_schema(),
+                    temperature=0.1,
+                    max_tokens=200,
+                    mode='suggest_tags',
+                )
+                return parse_tag_suggestions(raw)
+            except Exception:
+                logger.exception('Ollama suggest_tags failed, retry/fallback')
+
+        return empty_tag_suggestions()
 
 generator_service = BusinessTextGenerator()
