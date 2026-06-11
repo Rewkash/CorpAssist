@@ -26,6 +26,10 @@ frontend/support-chat-operator-ui*.html
 frontend/*.artifact.json
 frontend/support-workspace-app-closed-banner.jsx
 
+# Local dev scripts
+backend/start_backend.bat
+frontend/start_frontend.bat
+
 # IDE
 .idea/
 .vscode/
