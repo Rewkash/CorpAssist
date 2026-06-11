@@ -29,23 +29,40 @@ import { useSuggestedTags } from './hooks/useSuggestedTags'
 import { useTakeConversation } from './hooks/useTakeConversation'
 import { useTicketActions } from './hooks/useTicketActions'
 import { useWorkerAssignment } from './hooks/useWorkerAssignment'
+import { useChatStore } from './store/chatStore'
 
 export function ChatScreen() {
   const { token, role, email, theme, toggleTheme, logout, conversationId, setConversationId } = useAssistStore()
-  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [error, setError] = useState('')
-  const [connectionError, setConnectionError] = useState(false)
-  const [reconnectIn, setReconnectIn] = useState<number | null>(null)
-  const [isReconnectingNow, setIsReconnectingNow] = useState(false)
   const composer = useComposerState()
-  const [myId, setMyId] = useState<number | null>(null)
   const reconnectPhaseStartedAtRef = useRef<number | null>(null)
-  const [conversations, setConversations] = useState<Conversation[]>([])
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
-  const [clients, setClients] = useState<{ id: number; email: string; assigned_worker_id: number | null }[]>([])
-  const [workers, setWorkers] = useState<{ id: number; email: string }[]>([])
-  const [assignClientId, setAssignClientId] = useState<number | null>(null)
-  const [assignWorkerId, setAssignWorkerId] = useState<number | null>(null)
+  const messages = useChatStore((state) => state.messages)
+  const conversations = useChatStore((state) => state.conversations)
+  const selectedConversation = useChatStore((state) => state.selectedConversation)
+  const clientHistory = useChatStore((state) => state.clientHistory)
+  const clients = useChatStore((state) => state.clients)
+  const workers = useChatStore((state) => state.workers)
+  const myId = useChatStore((state) => state.myId)
+  const connectionError = useChatStore((state) => state.connectionError)
+  const reconnectIn = useChatStore((state) => state.reconnectIn)
+  const isReconnectingNow = useChatStore((state) => state.isReconnectingNow)
+  const assignClientId = useChatStore((state) => state.assignClientId)
+  const assignWorkerId = useChatStore((state) => state.assignWorkerId)
+  const setMessages = useChatStore((state) => state.setMessages)
+  const appendMessageIfMissing = useChatStore((state) => state.appendMessageIfMissing)
+  const setConversations = useChatStore((state) => state.setConversations)
+  const setConversationsSnapshot = useChatStore((state) => state.setConversationsSnapshot)
+  const setSelectedConversation = useChatStore((state) => state.setSelectedConversation)
+  const updateSelectedConversation = useChatStore((state) => state.updateSelectedConversation)
+  const setClientHistory = useChatStore((state) => state.setClientHistory)
+  const setClients = useChatStore((state) => state.setClients)
+  const setWorkers = useChatStore((state) => state.setWorkers)
+  const setMyId = useChatStore((state) => state.setMyId)
+  const setConnectionError = useChatStore((state) => state.setConnectionError)
+  const setReconnectIn = useChatStore((state) => state.setReconnectIn)
+  const setIsReconnectingNow = useChatStore((state) => state.setIsReconnectingNow)
+  const setAssignClientId = useChatStore((state) => state.setAssignClientId)
+  const setAssignWorkerId = useChatStore((state) => state.setAssignWorkerId)
   const sidebarUi = useSidebarUiState()
   const suggestedTags = useSuggestedTags({ token, conversationId, role })
   const frequentTags = ['Миграция', 'Срочно', 'VIP', 'Ожидание', 'Технический', 'Оплата']
@@ -115,14 +132,14 @@ export function ChatScreen() {
   })
 
   const handleSelectedConversationUpdate = useCallback((conversation: Conversation) => {
-    setSelectedConversation((current) => (conversation.id === conversationId ? conversation : current))
-  }, [conversationId])
+    updateSelectedConversation(conversation)
+  }, [updateSelectedConversation])
 
   const handleHistoryError = useCallback((message: string) => {
     setError(message)
   }, [])
 
-  const { clientHistory, setClientHistory } = useConversationHistory({
+  useConversationHistory({
     token,
     conversationId,
     selectedConversation,
@@ -265,10 +282,7 @@ export function ChatScreen() {
 
   const handleSocketMessageCreated = useCallback((message: ChatMessage) => {
     if (!conversationId || message.conversation_id !== conversationId) return
-    setMessages((prev) => {
-      if (prev.some((item) => item.id === message.id)) return prev
-      return [...prev, message]
-    })
+    appendMessageIfMissing(message)
     if (myId !== null && message.sender_id !== myId && !message.read_at && firstUnreadId === null && !isAtBottomRef.current) {
       setFirstUnreadId(message.id)
     }
@@ -278,12 +292,8 @@ export function ChatScreen() {
   }, [conversationId, token, myId, firstUnreadId])
 
   const handleSocketConversationsSnapshot = useCallback((items: Conversation[]) => {
-    setConversations(items)
-    setSelectedConversation((current) => {
-      if (!current) return null
-      return items.find((c) => c.id === current.id) || current
-    })
-  }, [])
+    setConversationsSnapshot(items)
+  }, [setConversationsSnapshot])
 
   const handleSocketConnectionState = useCallback((isConnected: boolean) => {
     setConnectionError(!isConnected)

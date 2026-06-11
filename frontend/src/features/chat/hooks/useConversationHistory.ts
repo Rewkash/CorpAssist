@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 
 import { getClientConversationHistory } from '../../../api'
 import type { Conversation } from '../../../api'
+import { useChatStore } from '../store/chatStore'
 
 type UseConversationHistoryParams = {
   token: string | null
@@ -20,7 +21,7 @@ export function useConversationHistory({
   onSelectedConversationUpdate,
   onError,
 }: UseConversationHistoryParams) {
-  const [clientHistory, setClientHistory] = useState<Conversation[]>([])
+  const setClientHistory = useChatStore((state) => state.setClientHistory)
   const conversationsRef = useRef(conversations)
 
   useEffect(() => {
@@ -61,5 +62,5 @@ export function useConversationHistory({
     }
   }, [token, conversationId, selectedConversation?.id, selectedConversation?.client_id])
 
-  return { clientHistory, setClientHistory }
+  return {}
 }
