@@ -9,6 +9,7 @@ import textwrap
 import httpx
 
 from app.config import settings
+from app.llm.fallbacks import fallback_improve, fallback_replies
 from app.parsers.llm_responses import parse_reply_variants, strip_intro
 from app.prompts.llm_prompts import (
     SYSTEM_PROMPT_IMPROVE,
@@ -324,7 +325,7 @@ class BusinessTextGenerator:
             except Exception:
                 logger.exception('Ollama suggest_replies failed, retry/fallback')
 
-        return self._fallback_replies(incoming_text, analysis, context)
+        return fallback_replies(incoming_text, analysis, context)
 
     async def improve_draft(self, draft: str, analysis: AnalysisResult, context: str = '') -> str:
         context_block = ''
@@ -353,7 +354,7 @@ class BusinessTextGenerator:
             except Exception:
                 logger.exception('Ollama improve_draft failed, retry/fallback')
 
-        return self._fallback_improve(draft)
+        return fallback_improve(draft)
 
     async def suggest_tags(self, conversation_text: str) -> dict[str, Any]:
         user_prompt = f'Текст диалога:\n\n{conversation_text[:4000]}'
@@ -392,51 +393,5 @@ class BusinessTextGenerator:
                 logger.exception('Ollama suggest_tags failed, retry/fallback')
 
         return {'auto_tags': [], 'suggested_tags': [], 'priority': False}
-
-    @staticmethod
-    def _fallback_replies(incoming_text: str, analysis: AnalysisResult, context: str = '') -> list[str]:
-        topic_hint = ', '.join(analysis.topics[:3])
-        short_base = textwrap.shorten(incoming_text.strip().replace('\n', ' '), width=180, placeholder='...')
-        context_line = (
-            f'Ранее по этому клиенту обсуждали: {textwrap.shorten(context, width=140, placeholder="...")}. '
-            if context.strip()
-            else ''
-        )
-        return [
-            (
-                context_line
-                + 'Благодарю за сообщение. Подтверждаю получение информации по вопросу '
-                f'({topic_hint}). Мы проанализируем детали и вернемся с ответом до конца дня.'
-            ),
-            (
-                'Спасибо за уточнение. По теме '
-                f'"{topic_hint}" предлагаю согласовать следующие шаги: 1) подтвердить требования, '
-                '2) зафиксировать сроки, 3) назначить ответственных. Готов обсудить детали.'
-            ),
-            (
-                'Принял ваше сообщение в работу. Для ускорения решения, пожалуйста, подтвердите, '
-                f'корректно ли мы понимаем запрос: "{short_base}". После подтверждения сразу приступим к исполнению.'
-            ),
-        ]
-
-    @staticmethod
-    def _fallback_improve(draft: str) -> str:
-        text = draft.strip()
-        replacements = {
-            'привет': 'Добрый день',
-            'ок': 'Хорошо',
-            'щас': 'в ближайшее время',
-            'сорян': 'Приношу извинения',
-            'надо': 'необходимо',
-            'типа': '',
-        }
-        improved = text
-        for src, dst in replacements.items():
-            improved = improved.replace(src, dst).replace(src.capitalize(), dst)
-        if not improved.endswith('.'):
-            improved += '.'
-        improved = improved.replace('  ', ' ').strip()
-        return improved
-
 
 generator_service = BusinessTextGenerator()
