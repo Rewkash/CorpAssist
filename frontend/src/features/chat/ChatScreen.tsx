@@ -1,37 +1,45 @@
 import { useCallback, useState } from 'react'
 import '../../supportChat.css'
 
-import { useOutsideClick } from '../../hooks/useOutsideClick'
 import { useAssistStore } from '../../store'
 import { ChatLayout } from './ChatLayout'
 import { FREQUENT_TAGS } from './chatConstants'
+import { useComposerWorkflowController } from './controllers/useComposerWorkflowController'
 import { useChatRuntimeController } from './controllers/useChatRuntimeController'
+import { useSidebarWorkflowController } from './controllers/useSidebarWorkflowController'
+import { useTicketWorkflowController } from './controllers/useTicketWorkflowController'
 import { useChatViewModel } from './hooks/useChatViewModel'
-import { useComposerAssistActions } from './hooks/useComposerAssistActions'
 import { useComposerState } from './hooks/useComposerState'
-import { useConversationTags } from './hooks/useConversationTags'
 import { useConversationHistory } from './hooks/useConversationHistory'
-import { useMessageSending } from './hooks/useMessageSending'
-import { useSidebarUiState } from './hooks/useSidebarUiState'
-import { useSuggestedTags } from './hooks/useSuggestedTags'
-import { useTakeConversation } from './hooks/useTakeConversation'
-import { useTicketActions } from './hooks/useTicketActions'
-import { useWorkerAssignment } from './hooks/useWorkerAssignment'
-import { useChatStore } from './store/chatStore'
 
 export function ChatScreen() {
   const { token, role, email, theme, toggleTheme, logout, conversationId, setConversationId } = useAssistStore()
   const [error, setError] = useState('')
   const composer = useComposerState()
-  const clientHistory = useChatStore((state) => state.clientHistory)
-  const clients = useChatStore((state) => state.clients)
-  const workers = useChatStore((state) => state.workers)
-  const assignClientId = useChatStore((state) => state.assignClientId)
-  const assignWorkerId = useChatStore((state) => state.assignWorkerId)
-  const setAssignClientId = useChatStore((state) => state.setAssignClientId)
-  const setAssignWorkerId = useChatStore((state) => state.setAssignWorkerId)
-  const sidebarUi = useSidebarUiState()
-  const suggestedTags = useSuggestedTags({ token, conversationId, role })
+  const sidebar = useSidebarWorkflowController({ token, conversationId, role })
+
+  const {
+    search,
+    setSearch,
+    rightCollapsed,
+    setRightCollapsed,
+    mobileMode,
+    viewportWidth,
+    manualTag,
+    setManualTag,
+    showTagDropdown,
+    tagDropdownRef,
+    clientHistory,
+    clients,
+    workers,
+    assignClientId,
+    assignWorkerId,
+    setAssignClientId,
+    setAssignWorkerId,
+    suggestedTags,
+    onShowTagDropdown,
+    onHideTagDropdown,
+  } = sidebar
 
   const {
     text,
@@ -47,20 +55,6 @@ export function ChatScreen() {
     replySuggestions,
     setReplySuggestions,
   } = composer
-
-  const {
-    search,
-    setSearch,
-    rightCollapsed,
-    setRightCollapsed,
-    mobileMode,
-    viewportWidth,
-    manualTag,
-    setManualTag,
-    showTagDropdown,
-    setShowTagDropdown,
-    tagDropdownRef,
-  } = sidebarUi
 
   const {
     messages,
@@ -108,12 +102,6 @@ export function ChatScreen() {
     onError: handleHistoryError,
   })
 
-  const hideTagDropdown = useCallback(() => {
-    setShowTagDropdown(false)
-  }, [setShowTagDropdown])
-
-  useOutsideClick(tagDropdownRef, hideTagDropdown)
-
   const {
     activeConversation,
     activeClientEmail,
@@ -127,70 +115,35 @@ export function ChatScreen() {
     search,
   })
 
-  const { sendCurrentMessage } = useMessageSending({
-    auth: { token, role },
-    guards: { isActiveConversationClosed },
-    conversation: {
-      conversationId,
-      setConversationId,
-    },
-    composer: {
-      text,
-      setText,
-      setBusy,
-      setError,
-      setAssistHint,
-      setReplySuggestions,
-    },
-    scroll: {
-      clearUnreadDividerSmooth,
-      forceScrollOnNextRenderRef,
-      isAtBottomRef,
-    },
-  })
-
-  const { suggest: onSuggest, improve: onImprove } = useComposerAssistActions({
+  const composerWorkflow = useComposerWorkflowController({
     token,
-    text,
+    role,
     conversationId,
+    setConversationId,
+    isActiveConversationClosed,
     messages,
     myId,
+    text,
     setText,
+    setBusy,
     setAssistBusy,
-    setGeneratingStatus,
-    setError,
-    setReplySuggestions,
     setAssistHint,
+    setGeneratingStatus,
+    setReplySuggestions,
+    setError,
+    clearUnreadDividerSmooth,
+    forceScrollOnNextRenderRef,
+    isAtBottomRef,
   })
 
-  const { takeSelectedConversation } = useTakeConversation({
+  const ticketWorkflow = useTicketWorkflowController({
     token,
     role,
+    conversationId,
     setConversationId,
+    activeTags,
     setFirstUnreadId,
     forceScrollOnNextRenderRef,
-    setError,
-  })
-
-  const { assignSelectedWorker } = useWorkerAssignment({
-    token,
-    setError,
-  })
-
-  const { addTag, removeTag, togglePriority } = useConversationTags({
-    token,
-    conversationId,
-    role,
-    activeTags,
-    setError,
-  })
-
-  const { closeTicket, transferTicket, createClientConversation } = useTicketActions({
-    token,
-    role,
-    conversationId,
-    setConversationId,
-    setFirstUnreadId,
     setText,
     setReplySuggestions,
     setError,
@@ -207,7 +160,7 @@ export function ChatScreen() {
         conversations: filteredConversations,
         conversationId,
         onSearchChange: setSearch,
-        onTakeConversation: takeSelectedConversation,
+        onTakeConversation: ticketWorkflow.takeSelectedConversation,
         onLogout: logout,
       }}
       center={{
@@ -236,28 +189,19 @@ export function ChatScreen() {
         reconnectIn,
         error,
         assistHint,
-        onCreateClientConversation: createClientConversation,
-        onCloseTicket: closeTicket,
-        onTransferTicket: transferTicket,
+        onCreateClientConversation: ticketWorkflow.createClientConversation,
+        onCloseTicket: ticketWorkflow.closeTicket,
+        onTransferTicket: ticketWorkflow.transferTicket,
         onToggleRightCollapsed: () => setRightCollapsed((v) => !v),
         onMessagesScroll: handleMessagesScroll,
         onJumpToBottom: jumpToBottom,
-        onSuggest,
-        onImprove,
-        onSend: sendCurrentMessage,
-        onTextChange: (event) => setText(event.target.value),
-        onTextKeyDown: (event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault()
-            sendCurrentMessage()
-          }
-        },
-        onHideSuggestions: () => setReplySuggestions([]),
-        onSelectSuggestion: (suggestion) => {
-          setText(suggestion)
-          setReplySuggestions([])
-          setAssistHint('Вариант подставлен в поле ввода.')
-        },
+        onSuggest: composerWorkflow.onSuggest,
+        onImprove: composerWorkflow.onImprove,
+        onSend: composerWorkflow.onSend,
+        onTextChange: composerWorkflow.onTextChange,
+        onTextKeyDown: composerWorkflow.onTextKeyDown,
+        onHideSuggestions: composerWorkflow.onHideSuggestions,
+        onSelectSuggestion: composerWorkflow.onSelectSuggestion,
       }}
       sidebar={{
         mobileMode,
@@ -276,16 +220,16 @@ export function ChatScreen() {
         assignWorkerId,
         clients,
         workers,
-        onTakeConversation: takeSelectedConversation,
-        onTogglePriority: togglePriority,
-        onAddTag: addTag,
-        onRemoveTag: removeTag,
+        onTakeConversation: ticketWorkflow.takeSelectedConversation,
+        onTogglePriority: ticketWorkflow.togglePriority,
+        onAddTag: ticketWorkflow.addTag,
+        onRemoveTag: ticketWorkflow.removeTag,
         onManualTagChange: setManualTag,
-        onShowTagDropdown: () => setShowTagDropdown(true),
-        onHideTagDropdown: () => setShowTagDropdown(false),
+        onShowTagDropdown,
+        onHideTagDropdown,
         onAssignClientId: setAssignClientId,
         onAssignWorkerId: setAssignWorkerId,
-        onAssignWorker: assignSelectedWorker,
+        onAssignWorker: ticketWorkflow.assignSelectedWorker,
       }}
     />
   )
