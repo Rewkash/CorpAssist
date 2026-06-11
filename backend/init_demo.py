@@ -1,6 +1,5 @@
 import asyncio
-from sqlalchemy.exc import OperationalError
-from app.database import Base, engine
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from sqlalchemy import select
 
@@ -9,12 +8,15 @@ from app.database import AsyncSessionLocal
 from app.models import User
 
 
+MIGRATION_REQUIRED_MESSAGE = (
+    'Database schema is managed by Alembic. Run `alembic upgrade head` '
+    'before executing init_demo.py.'
+)
+
+
 async def main() -> None:
     for _ in range(20):
         try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-
             async with AsyncSessionLocal() as db:
                 admin_result = await db.execute(select(User).where(User.email == 'admin@corpassist.local'))
                 admin = admin_result.scalar_one_or_none()
@@ -36,6 +38,9 @@ async def main() -> None:
                 return
         except OperationalError:
             await asyncio.sleep(2)
+        except ProgrammingError:
+            print(MIGRATION_REQUIRED_MESSAGE)
+            raise
 
 
 if __name__ == '__main__':
