@@ -1,8 +1,6 @@
-import asyncio
-
 import pytest
 
-from app.generator import BusinessTextGenerator
+from app.llm.model_lifecycle import ModelLifecycleManager
 
 
 class FakeOllamaClient:
@@ -29,42 +27,35 @@ class FakeOllamaClient:
 
 
 @pytest.fixture
-def saved_models(monkeypatch) -> list[str]:
-    saved: list[str] = []
-
-    monkeypatch.setitem(BusinessTextGenerator.switch_model.__globals__, 'save_model', saved.append)
-
-    return saved
+def saved_models() -> list[str]:
+    return []
 
 
 @pytest.fixture
-def cleared_models(monkeypatch) -> list[str]:
-    cleared: list[str] = []
+def cleared_models() -> list[str]:
+    return []
+
+
+def make_manager(
+    fake_llm: FakeOllamaClient,
+    saved_models: list[str] | None = None,
+    cleared_models: list[str] | None = None,
+) -> ModelLifecycleManager:
+    saved = saved_models if saved_models is not None else []
+    cleared = cleared_models if cleared_models is not None else []
 
     def clear() -> None:
         cleared.append('cleared')
 
-    monkeypatch.setitem(BusinessTextGenerator.cancel_loading_and_clear.__globals__, 'clear_saved_model', clear)
-
-    return cleared
-
-
-def make_generator(fake_llm: FakeOllamaClient) -> BusinessTextGenerator:
-    generator = BusinessTextGenerator.__new__(BusinessTextGenerator)
-    generator._llm = fake_llm
-    generator._model_lock = asyncio.Lock()
-    generator._model_loading = False
-    generator._model_status = 'ready'
-    generator._model_switch_task = None
-    return generator
+    return ModelLifecycleManager(fake_llm, save_model_fn=saved.append, clear_saved_model_fn=clear)
 
 
 @pytest.mark.asyncio
 async def test_switch_model_success_unloads_previous_sets_target_preloads_and_saves(saved_models):
     fake_llm = FakeOllamaClient('previous')
-    generator = make_generator(fake_llm)
+    lifecycle = make_manager(fake_llm, saved_models=saved_models)
 
-    await generator.switch_model('target')
+    await lifecycle.switch_model('target')
 
     assert fake_llm.calls == [
         ('unload_model', 'previous'),
@@ -72,19 +63,19 @@ async def test_switch_model_success_unloads_previous_sets_target_preloads_and_sa
         ('preload_model', 'target'),
     ]
     assert saved_models == ['target']
-    assert generator.model == 'target'
-    assert generator.model_status == 'Модель target готова'
-    assert generator.model_loading is False
+    assert lifecycle.model == 'target'
+    assert lifecycle.model_status == 'Модель target готова'
+    assert lifecycle.model_loading is False
 
 
 @pytest.mark.asyncio
 async def test_switch_model_failed_preload_rolls_back_without_saving(saved_models):
     fake_llm = FakeOllamaClient('previous')
     fake_llm.fail_preload = True
-    generator = make_generator(fake_llm)
+    lifecycle = make_manager(fake_llm, saved_models=saved_models)
 
     with pytest.raises(RuntimeError, match='preload failed'):
-        await generator.switch_model('target')
+        await lifecycle.switch_model('target')
 
     assert fake_llm.calls == [
         ('unload_model', 'previous'),
@@ -93,44 +84,44 @@ async def test_switch_model_failed_preload_rolls_back_without_saving(saved_model
         ('set_model', 'previous'),
     ]
     assert saved_models == []
-    assert generator.model == 'previous'
-    assert generator.model_status == 'Не удалось загрузить модель target'
-    assert generator.model_loading is False
+    assert lifecycle.model == 'previous'
+    assert lifecycle.model_status == 'Не удалось загрузить модель target'
+    assert lifecycle.model_loading is False
 
 
 @pytest.mark.asyncio
 async def test_unload_current_model_unloads_current_and_resets_loading():
     fake_llm = FakeOllamaClient('current')
-    generator = make_generator(fake_llm)
+    lifecycle = make_manager(fake_llm)
 
-    await generator.unload_current_model()
+    await lifecycle.unload_current_model()
 
     assert fake_llm.calls == [('unload_model', 'current')]
-    assert generator.model_status == 'Модель current выгружена'
-    assert generator.model_loading is False
+    assert lifecycle.model_status == 'Модель current выгружена'
+    assert lifecycle.model_loading is False
 
 
 def test_ensure_ready_allows_ready_and_raises_current_status_when_loading():
     fake_llm = FakeOllamaClient('current')
-    generator = make_generator(fake_llm)
+    lifecycle = make_manager(fake_llm)
 
-    generator.ensure_ready()
+    lifecycle.ensure_ready()
 
-    generator._model_loading = True
-    generator._model_status = 'Загружается модель current'
+    lifecycle._model_loading = True
+    lifecycle._model_status = 'Загружается модель current'
 
     with pytest.raises(RuntimeError, match='Загружается модель current'):
-        generator.ensure_ready()
+        lifecycle.ensure_ready()
 
 
 @pytest.mark.asyncio
 async def test_cancel_loading_and_clear_without_active_loading_unloads_current_and_clears(cleared_models):
     fake_llm = FakeOllamaClient('current')
-    generator = make_generator(fake_llm)
+    lifecycle = make_manager(fake_llm, cleared_models=cleared_models)
 
-    await generator.cancel_loading_and_clear()
+    await lifecycle.cancel_loading_and_clear()
 
     assert fake_llm.calls == [('unload_model', 'current')]
     assert cleared_models == ['cleared']
-    assert generator.model_status == 'Загрузка остановлена, модель выгружена, выбор очищен'
-    assert generator.model_loading is False
+    assert lifecycle.model_status == 'Загрузка остановлена, модель выгружена, выбор очищен'
+    assert lifecycle.model_loading is False
