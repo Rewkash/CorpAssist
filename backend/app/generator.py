@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import textwrap
-import re
 
 import httpx
 
 from app.config import settings
+from app.parsers.llm_responses import parse_reply_variants, strip_intro
 from app.prompts.llm_prompts import (
     SYSTEM_PROMPT_IMPROVE,
     SYSTEM_PROMPT_REPLY,
@@ -35,9 +35,6 @@ MORALIZING_MARKERS = (
     'мы понимаем, что вы испытываете',
     'опишите вашу проблему более подробно',
 )
-INTRO_MARKERS = ('конечно', 'хорошо', 'давайте', 'вот', 'варианты')
-VARIANT_TITLE_RE = re.compile(r'^\s*(?:вариант\s*\d+\s*[:.)-]?|\d+\s*[.)-])\s*$', re.IGNORECASE)
-VARIANT_PREFIX_RE = re.compile(r'^\s*(?:вариант\s*\d+\s*[:.)-]?|\d+\s*[.)-])\s*', re.IGNORECASE)
 
 
 class OllamaClient:
@@ -320,8 +317,8 @@ class BusinessTextGenerator:
                     max_tokens=600,
                     mode='suggest_replies',
                 )
-                cleaned = self._strip_intro(raw)
-                variants = self._parse_reply_variants(cleaned)
+                cleaned = strip_intro(raw)
+                variants = parse_reply_variants(cleaned)
                 if len(variants) >= 2:
                     return variants[:3]
             except Exception:
@@ -346,7 +343,7 @@ class BusinessTextGenerator:
                     max_tokens=512,
                     mode='improve_draft',
                 )
-                improved = self._strip_intro(improved)
+                improved = strip_intro(improved)
                 low = improved.lower()
                 has_moral = any(marker in low for marker in MORALIZING_MARKERS)
                 if len(improved) > 10 and not has_moral:
@@ -395,32 +392,6 @@ class BusinessTextGenerator:
                 logger.exception('Ollama suggest_tags failed, retry/fallback')
 
         return {'auto_tags': [], 'suggested_tags': [], 'priority': False}
-
-    @staticmethod
-    def _strip_intro(text: str) -> str:
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        while lines:
-            first = lines[0].lower()
-            if any(marker in first for marker in INTRO_MARKERS):
-                lines.pop(0)
-                continue
-            break
-        return '\n'.join(lines).strip() or text.strip()
-
-    @staticmethod
-    def _parse_reply_variants(text: str) -> list[str]:
-        normalized = re.sub(r'^\s*(?:вариант\s*\d+\s*[:.)-]?|\d+\s*[.)-])\s*$', '---', text, flags=re.IGNORECASE | re.MULTILINE)
-        variants: list[str] = []
-        for part in normalized.split('---'):
-            lines = [line.strip() for line in part.splitlines() if line.strip()]
-            while lines and VARIANT_TITLE_RE.match(lines[0]):
-                lines.pop(0)
-            cleaned = '\n'.join(lines).strip()
-            cleaned = VARIANT_PREFIX_RE.sub('', cleaned).strip()
-            cleaned = BusinessTextGenerator._strip_intro(cleaned)
-            if cleaned:
-                variants.append(cleaned)
-        return variants
 
     @staticmethod
     def _fallback_replies(incoming_text: str, analysis: AnalysisResult, context: str = '') -> list[str]:
