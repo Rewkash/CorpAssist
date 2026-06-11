@@ -1,21 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import clsx from 'clsx'
 import '../../supportChat.css'
 
 import { markMessagesRead } from '../../api'
 import type { ChatMessage, Conversation } from '../../api'
-import { ChatHeader } from '../../components/ChatHeader'
-import { ClosedConversationPanel } from '../../components/ClosedConversationPanel'
-import { ConversationList } from '../../components/ConversationList'
-import { JumpToBottomButton } from '../../components/JumpToBottomButton'
-import { MessageComposer } from '../../components/MessageComposer'
-import { MessageList } from '../../components/MessageList'
-import { RightSidebar } from '../../components/RightSidebar'
 import { useDocumentThemeClass } from '../../hooks/useDocumentThemeClass'
 import { useOutsideClick } from '../../hooks/useOutsideClick'
 import { useChat } from '../../useChat'
 import { useAssistStore } from '../../store'
-import { formatHistoryDate } from './chatFormatters'
+import { ChatLayout } from './ChatLayout'
+import { FREQUENT_TAGS } from './chatConstants'
 import { useChatBootstrap } from './hooks/useChatBootstrap'
 import { useChatScroll } from './hooks/useChatScroll'
 import { useChatViewModel } from './hooks/useChatViewModel'
@@ -55,7 +48,6 @@ export function ChatScreen() {
   const setAssignWorkerId = useChatStore((state) => state.setAssignWorkerId)
   const sidebarUi = useSidebarUiState()
   const suggestedTags = useSuggestedTags({ token, conversationId, role })
-  const frequentTags = ['Миграция', 'Срочно', 'VIP', 'Ожидание', 'Технический', 'Оплата']
 
   const {
     text,
@@ -263,111 +255,95 @@ export function ChatScreen() {
   })
 
   return (
-    <div className="supportRoot">
-      <div
-        className={clsx('appShell', rightCollapsed && 'rightCollapsed')}
-      >
-        <ConversationList
-          email={email}
-          role={role}
-          search={search}
-          conversations={filteredConversations}
-          conversationId={conversationId}
-          onSearchChange={setSearch}
-          onTakeConversation={takeSelectedConversation}
-          onLogout={logout}
-        />
-
-        <main className="center" style={{ display: mobileMode === 'chat' ? 'flex' : undefined }}>
-          <ChatHeader
-            activeConversation={activeConversation}
-            role={role}
-            conversationId={conversationId}
-            rightCollapsed={rightCollapsed}
-            onCreateClientConversation={createClientConversation}
-            onCloseTicket={closeTicket}
-            onTransferTicket={transferTicket}
-            onToggleRightCollapsed={() => setRightCollapsed((v) => !v)}
-          />
-          <MessageList
-            conversationId={conversationId}
-            messages={messages}
-            myId={myId}
-            firstUnreadId={firstUnreadId}
-            isUnreadDividerHiding={isUnreadDividerHiding}
-            messagesRef={messagesRef}
-            onScroll={handleMessagesScroll}
-          />
-          {showJumpDown && (
-            <JumpToBottomButton bottomOffset={jumpBottomOffset} newMessagesCount={newMessagesCount} onClick={jumpToBottom} />
-          )}
-          {isActiveConversationClosed ? (
-            <ClosedConversationPanel closedAt={activeConversation?.closed_at} bottomPanelRef={bottomPanelRef} />
-          ) : (
-            <MessageComposer
-              text={text}
-              busy={busy}
-              role={role}
-              conversationId={conversationId}
-              assistBusy={assistBusy}
-              generatingStatus={generatingStatus}
-              replySuggestions={replySuggestions}
-              connectionError={connectionError}
-              isReconnectingNow={isReconnectingNow}
-              reconnectIn={reconnectIn}
-              error={error}
-              assistHint={assistHint}
-              bottomPanelRef={bottomPanelRef}
-              onSuggest={onSuggest}
-              onImprove={onImprove}
-              onSend={sendCurrentMessage}
-              onTextChange={(e) => setText(e.target.value)}
-              onTextKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  sendCurrentMessage()
-                }
-              }}
-              onHideSuggestions={() => setReplySuggestions([])}
-              onSelectSuggestion={(suggestion) => {
-                setText(suggestion)
-                setReplySuggestions([])
-                setAssistHint('Вариант подставлен в поле ввода.')
-              }}
-            />
-          )}
-        </main>
-
-        <RightSidebar
-          mobileMode={mobileMode}
-          activeConversation={activeConversation}
-          activeClientEmail={activeClientEmail}
-          clientHistory={clientHistory}
-          conversationId={conversationId}
-          role={role}
-          activeTags={activeTags}
-          suggestedTags={suggestedTags}
-          frequentTags={frequentTags}
-          manualTag={manualTag}
-          showTagDropdown={showTagDropdown}
-          tagDropdownRef={tagDropdownRef}
-          assignClientId={assignClientId}
-          assignWorkerId={assignWorkerId}
-          clients={clients}
-          workers={workers}
-          onTakeConversation={takeSelectedConversation}
-          onTogglePriority={() => void togglePriority()}
-          onAddTag={(tag) => void addTag(tag)}
-          onRemoveTag={(tag) => void removeTag(tag)}
-          onManualTagChange={setManualTag}
-          onShowTagDropdown={() => setShowTagDropdown(true)}
-          onHideTagDropdown={() => setShowTagDropdown(false)}
-          onAssignClientId={setAssignClientId}
-          onAssignWorkerId={setAssignWorkerId}
-          onAssignWorker={assignSelectedWorker}
-          formatHistoryDate={formatHistoryDate}
-        />
-      </div>
-    </div>
+    <ChatLayout
+      rightCollapsed={rightCollapsed}
+      conversation={{
+        email,
+        role,
+        search,
+        conversations: filteredConversations,
+        conversationId,
+        onSearchChange: setSearch,
+        onTakeConversation: takeSelectedConversation,
+        onLogout: logout,
+      }}
+      center={{
+        mobileMode,
+        activeConversation,
+        role,
+        conversationId,
+        rightCollapsed,
+        messages,
+        myId,
+        firstUnreadId,
+        isUnreadDividerHiding,
+        messagesRef,
+        bottomPanelRef,
+        showJumpDown,
+        jumpBottomOffset,
+        newMessagesCount,
+        isActiveConversationClosed,
+        text,
+        busy,
+        assistBusy,
+        generatingStatus,
+        replySuggestions,
+        connectionError,
+        isReconnectingNow,
+        reconnectIn,
+        error,
+        assistHint,
+        onCreateClientConversation: createClientConversation,
+        onCloseTicket: closeTicket,
+        onTransferTicket: transferTicket,
+        onToggleRightCollapsed: () => setRightCollapsed((v) => !v),
+        onMessagesScroll: handleMessagesScroll,
+        onJumpToBottom: jumpToBottom,
+        onSuggest,
+        onImprove,
+        onSend: sendCurrentMessage,
+        onTextChange: (event) => setText(event.target.value),
+        onTextKeyDown: (event) => {
+          if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault()
+            sendCurrentMessage()
+          }
+        },
+        onHideSuggestions: () => setReplySuggestions([]),
+        onSelectSuggestion: (suggestion) => {
+          setText(suggestion)
+          setReplySuggestions([])
+          setAssistHint('Вариант подставлен в поле ввода.')
+        },
+      }}
+      sidebar={{
+        mobileMode,
+        activeConversation,
+        activeClientEmail,
+        clientHistory,
+        conversationId,
+        role,
+        activeTags,
+        suggestedTags,
+        frequentTags: FREQUENT_TAGS,
+        manualTag,
+        showTagDropdown,
+        tagDropdownRef,
+        assignClientId,
+        assignWorkerId,
+        clients,
+        workers,
+        onTakeConversation: takeSelectedConversation,
+        onTogglePriority: togglePriority,
+        onAddTag: addTag,
+        onRemoveTag: removeTag,
+        onManualTagChange: setManualTag,
+        onShowTagDropdown: () => setShowTagDropdown(true),
+        onHideTagDropdown: () => setShowTagDropdown(false),
+        onAssignClientId: setAssignClientId,
+        onAssignWorkerId: setAssignWorkerId,
+        onAssignWorker: assignSelectedWorker,
+      }}
+    />
   )
 }
