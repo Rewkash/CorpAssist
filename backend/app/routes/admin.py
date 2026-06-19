@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.deps import require_role
-from app.models import User
+from app.models import Conversation, ConversationSummary, User
 from app.schemas import AssignWorkerRequest, MeResponse
+from app.services.conversation_summarizer import summarize_conversation
 
 router = APIRouter()
 
@@ -45,3 +46,37 @@ async def assign_worker(
     client.assigned_worker_id = worker.id
     await db.commit()
     return {'status': 'ok'}
+
+
+@router.post('/admin/bootstrap-memory')
+async def bootstrap_memory(
+    _: User = Depends(require_role('admin')),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    """Generate summaries for all closed conversations that don't have one yet.
+
+    This is a one-time bootstrap endpoint for retroactively populating
+    client long-term memory from existing conversation history.
+    Runs summarization sequentially to avoid overwhelming the LLM.
+    """
+    # Find closed conversations without summaries
+    existing_ids = select(ConversationSummary.conversation_id)
+    result = await db.execute(
+        select(Conversation)
+        .where(Conversation.status == 'closed', ~Conversation.id.in_(existing_ids))
+        .order_by(Conversation.created_at.asc())
+    )
+    conversations = result.scalars().all()
+
+    generated = 0
+    failed = 0
+    for conv in conversations:
+        try:
+            async with AsyncSessionLocal() as bg_db:
+                summary = await summarize_conversation(bg_db, conv)
+                if summary:
+                    generated += 1
+        except Exception:
+            failed += 1
+
+    return {'generated': generated, 'failed': failed, 'total_closed': len(conversations)}

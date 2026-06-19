@@ -100,3 +100,66 @@ class ChatMessage(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates='messages')
+
+
+class ConversationSummary(Base):
+    """LLM-generated summary of a closed conversation, used for client long-term memory."""
+    __tablename__ = 'conversation_summaries'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey('conversations.id', ondelete='CASCADE'), unique=True, index=True,
+    )
+    client_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    key_topics: Mapped[str] = mapped_column(Text, default='[]')
+    resolution: Mapped[str] = mapped_column(String(50), default='')
+    sentiment_trend: Mapped[str] = mapped_column(String(50), default='')
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    conversation: Mapped[Conversation] = relationship()
+
+    def get_key_topics(self) -> list[str]:
+        if not self.key_topics:
+            return []
+        try:
+            loaded = _json.loads(self.key_topics)
+            if isinstance(loaded, list):
+                return [str(t).strip() for t in loaded if str(t).strip()]
+        except Exception:
+            pass
+        return []
+
+    def set_key_topics(self, topics: list[str]) -> None:
+        self.key_topics = _json.dumps([t.strip() for t in topics if t.strip()], ensure_ascii=False)
+
+
+class ClientProfile(Base):
+    """Aggregated client profile built from conversation summaries."""
+    __tablename__ = 'client_profiles'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    client_id: Mapped[int] = mapped_column(
+        ForeignKey('users.id', ondelete='CASCADE'), unique=True, index=True,
+    )
+    profile: Mapped[str] = mapped_column(Text, default='')
+    common_topics: Mapped[str] = mapped_column(Text, default='[]')
+    communication_style: Mapped[str] = mapped_column(String(50), default='')
+    interaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )
+
+    def get_common_topics(self) -> list[str]:
+        if not self.common_topics:
+            return []
+        try:
+            loaded = _json.loads(self.common_topics)
+            if isinstance(loaded, list):
+                return [str(t).strip() for t in loaded if str(t).strip()]
+        except Exception:
+            pass
+        return []
+
+    def set_common_topics(self, topics: list[str]) -> None:
+        self.common_topics = _json.dumps([t.strip() for t in topics if t.strip()], ensure_ascii=False)

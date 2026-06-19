@@ -57,8 +57,8 @@ class BusinessTextGenerator:
     async def suggest_replies(self, incoming_text: str, analysis: AnalysisResult, context: str = '') -> list[str]:
         context_block = ''
         if context.strip():
-            short_context = textwrap.shorten(context, width=300, placeholder='...')
-            context_block = f'Контекст предыдущего общения:\n{short_context}\n\n'
+            short_context = textwrap.shorten(context, width=1500, placeholder='...')
+            context_block = f'Контекст общения с клиентом:\n{short_context}\n\n'
 
         user_prompt = f'{context_block}Последнее сообщение клиента:\n{incoming_text.strip()}'
 
@@ -84,7 +84,7 @@ class BusinessTextGenerator:
         context_block = ''
         if context.strip():
             short_context = textwrap.shorten(context, width=3000, placeholder='...')
-            context_block = f'Контекст диалога только для понимания темы. Не переписывай его и не отвечай на него:\n{short_context}\n\n'
+            context_block = f'Контекст общения с клиентом (для понимания темы и истории). Не переписывай его и не отвечай на него:\n{short_context}\n\n'
 
         user_prompt = f'{context_block}Черновик оператора для улучшения:\n\n{draft.strip()}'
 

@@ -1,8 +1,11 @@
+import asyncio
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import AsyncSessionLocal, get_db
 from app.deps import get_current_user, require_role
 from app.models import ChatMessage, Conversation, User
 from app.realtime.conversation_snapshots import push_conversations_snapshot
@@ -18,6 +21,9 @@ from app.services.conversation_access import get_accessible_conversation
 from app.services.conversation_list import list_conversations_for_user
 from app.services.conversation_presenter import build_conversation_items
 from app.services.conversation_tags import suggest_conversation_tags_for_user
+from app.services.conversation_summarizer import summarize_conversation
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -229,6 +235,17 @@ async def close_conversation(
     await db.refresh(conversation)
     items = await build_conversation_items(db, user, [conversation])
     await push_conversations_snapshot(db, conversation, user_socket_hub=user_hub)
+
+    # Background: generate conversation summary for long-term client memory
+    async def _summarize_background() -> None:
+        try:
+            async with AsyncSessionLocal() as bg_db:
+                await summarize_conversation(bg_db, conversation)
+        except Exception:
+            logger.exception('Background summarization failed for conversation %d', conversation.id)
+
+    asyncio.create_task(_summarize_background())
+
     return items[0]
 
 
