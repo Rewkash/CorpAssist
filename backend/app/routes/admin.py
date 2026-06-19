@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal, get_db
@@ -7,6 +7,7 @@ from app.deps import require_role
 from app.models import Conversation, ConversationSummary, User
 from app.schemas import AssignWorkerRequest, MeResponse
 from app.services.conversation_summarizer import summarize_conversation
+from app.services.embedding_service import embed_conversation_summary, is_pgvector_available
 
 router = APIRouter()
 
@@ -80,3 +81,48 @@ async def bootstrap_memory(
             failed += 1
 
     return {'generated': generated, 'failed': failed, 'total_closed': len(conversations)}
+
+
+@router.post('/admin/bootstrap-embeddings')
+async def bootstrap_embeddings(
+    _: User = Depends(require_role('admin')),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, int]:
+    """Generate embeddings for all conversation summaries that don't have one yet.
+
+    This is a one-time bootstrap for retroactively populating vector
+    embeddings from existing summaries. Requires pgvector extension.
+    """
+    if not is_pgvector_available():
+        return {'error': 'pgvector not available', 'generated': 0, 'total': 0}
+
+    from app.generator import generator_service
+
+    # Find summaries without embeddings (use raw SQL for pgvector compatibility)
+    result = await db.execute(
+        sa_text('SELECT * FROM conversation_summaries WHERE embedding IS NULL ORDER BY generated_at ASC')
+    )
+    rows = result.fetchall()
+    summary_ids = [row.id for row in rows]
+
+    generated = 0
+    failed = 0
+    for sm_id in summary_ids:
+        try:
+            async with AsyncSessionLocal() as bg_db:
+                sm_result = await bg.execute(
+                    select(ConversationSummary).where(ConversationSummary.id == sm_id)
+                )
+                sm = sm_result.scalar_one_or_none()
+                if not sm:
+                    continue
+                ok = await embed_conversation_summary(bg_db, generator_service._llm, sm)
+                if ok:
+                    await bg_db.commit()
+                    generated += 1
+                else:
+                    failed += 1
+        except Exception:
+            failed += 1
+
+    return {'generated': generated, 'failed': failed, 'total': len(summary_ids)}

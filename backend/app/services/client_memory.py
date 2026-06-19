@@ -1,28 +1,35 @@
 """Client long-term memory: retrieve profile + conversation summaries for AI context.
 
-Two-level retrieval strategy:
-  1. Client profile (always included)
-  2. Recent summaries (fresh history)
-  3. Topically relevant summaries (topic-match from older dialogs)
+Three-level retrieval strategy:
+  0. Client profile (always included — aggregated info)
+  1. Recent summaries (fresh history, always included)
+  2. Relevant summaries via hybrid search:
+     - Channel A: Topic-match (key_topics overlap)
+     - Channel B: Vector search (pgvector cosine similarity)
+     - Fusion: Reciprocal Rank Fusion (RRF)
 
-This ensures that even old conversations resurface when their topics
-overlap with the current dialog, without requiring vector search.
+Graceful degradation:
+  - pgvector available + embeddings stored → hybrid RRF
+  - pgvector unavailable / no embeddings → topic-match only
+  - No topics match → recent summaries only
 """
 
-import json as _json
 import logging
 from collections import Counter
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.llm.ollama_client import OllamaClient
 from app.models import ClientProfile, ConversationSummary
+from app.services.hybrid_search import hybrid_search, is_pgvector_available
+from app.services.embedding_service import embed_query
 
 logger = logging.getLogger(__name__)
 
 # Limits to keep token usage under control
 MAX_RECENT_SUMMARIES = 2
-MAX_TOPIC_MATCH_SUMMARIES = 2
+MAX_RELEVANT_SUMMARIES = 2
 MAX_PROFILE_CHARS = 500
 MAX_SUMMARY_CHARS = 300
 MAX_TOTAL_MEMORY_CHARS = 1500
@@ -41,48 +48,6 @@ async def get_recent_summaries(db: AsyncSession, client_id: int, limit: int = MA
         .limit(limit)
     )
     return list(result.scalars().all())
-
-
-async def get_topic_matched_summaries(
-    db: AsyncSession,
-    client_id: int,
-    current_topics: list[str],
-    exclude_ids: set[int] | None = None,
-    limit: int = MAX_TOPIC_MATCH_SUMMARIES,
-) -> list[ConversationSummary]:
-    """Find older conversation summaries whose key_topics overlap with current topics.
-
-    Uses PostgreSQL's JSONB array containment for efficient topic matching.
-    Falls back to a simpler approach if JSONB operators aren't available.
-    """
-    if not current_topics:
-        return []
-
-    exclude_ids = exclude_ids or set()
-
-    # Fetch all summaries for this client that aren't already selected
-    result = await db.execute(
-        select(ConversationSummary)
-        .where(ConversationSummary.client_id == client_id)
-        .order_by(ConversationSummary.generated_at.desc())
-    )
-    all_summaries = list(result.scalars().all())
-
-    # Score each summary by topic overlap
-    scored: list[tuple[int, ConversationSummary]] = []
-    current_topics_lower = {t.lower().strip() for t in current_topics if t.strip()}
-    for sm in all_summaries:
-        if sm.id in exclude_ids:
-            continue
-        sm_topics_lower = {t.lower().strip() for t in sm.get_key_topics() if t.strip()}
-        overlap = len(current_topics_lower & sm_topics_lower)
-        if overlap > 0:
-            scored.append((overlap, sm))
-
-    # Sort by overlap count (desc), then by recency (generated_at desc via list order)
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    return [sm for _, sm in scored[:limit]]
 
 
 async def get_or_create_client_profile(db: AsyncSession, client_id: int) -> ClientProfile:
@@ -107,19 +72,20 @@ async def build_client_memory_context(
     db: AsyncSession,
     client_id: int,
     current_topics: list[str] | None = None,
+    llm: OllamaClient | None = None,
 ) -> str:
     """Build a compact text block with client long-term memory for LLM injection.
 
     Structure:
-      1. Client profile (communication style, common topics)
-      2. Recent conversation summaries (fresh history, always included)
-      3. Topically relevant summaries (matched by key_topics overlap)
+      0. Client profile (always included)
+      1. Recent conversation summaries (fresh history, always included)
+      2. Relevant summaries via hybrid search (topic + vector with RRF)
 
     The total size is capped at MAX_TOTAL_MEMORY_CHARS to avoid token bloat.
     """
     parts: list[str] = []
 
-    # 1. Client profile
+    # 0. Client profile (always included)
     profile = await get_client_profile(db, client_id)
     if profile and profile.profile.strip():
         style_note = ''
@@ -132,21 +98,42 @@ async def build_client_memory_context(
         profile_block = f'📋 Профиль клиента (из {profile.interaction_count} обращений):{style_note}{topics_note}\n{profile.profile[:MAX_PROFILE_CHARS]}'
         parts.append(profile_block)
 
-    # 2. Recent summaries (always included)
+    # 1. Recent summaries (always included — fresh context)
     recent = await get_recent_summaries(db, client_id, limit=MAX_RECENT_SUMMARIES)
     recent_ids = {sm.id for sm in recent}
 
-    # 3. Topic-matched summaries (from older dialogs)
-    topic_matched: list[ConversationSummary] = []
-    if current_topics:
-        topic_matched = await get_topic_matched_summaries(
-            db, client_id, current_topics, exclude_ids=recent_ids,
+    # 2. Relevant summaries via hybrid search
+    relevant_results: list = []
+    current_topics = current_topics or []
+
+    # Try to generate query embedding for vector search
+    query_embedding: list[float] = []
+    if llm and current_topics:
+        try:
+            query_text = ' '.join(current_topics)
+            query_embedding = await embed_query(llm, query_text)
+        except Exception:
+            logger.debug('Query embedding generation failed, falling back to topic-match only')
+
+    # Run hybrid search (automatically degrades to topic-match if no embedding)
+    try:
+        relevant_results = await hybrid_search(
+            db=db,
+            client_id=client_id,
+            current_topics=current_topics,
+            query_embedding=query_embedding,
+            exclude_ids=recent_ids,
+            max_results=MAX_RELEVANT_SUMMARIES,
         )
+    except Exception:
+        logger.exception('Hybrid search failed for client_id=%d', client_id)
+        relevant_results = []
+
+    relevant_summaries = [r.summary for r in relevant_results]
 
     # Combine summaries section
-    all_summaries = recent + topic_matched
+    all_summaries = list(recent) + relevant_summaries
     if all_summaries:
-        # Deduplicate and separate by relevance type
         seen_ids: set[int] = set()
         recent_lines: list[str] = []
         relevant_lines: list[str] = []
@@ -157,11 +144,14 @@ async def build_client_memory_context(
             seen_ids.add(sm.id)
             recent_lines.append(_format_summary(sm))
 
-        for sm in topic_matched:
-            if sm.id in seen_ids:
+        for r in relevant_results:
+            if r.summary.id in seen_ids:
                 continue
-            seen_ids.add(sm.id)
-            relevant_lines.append(_format_summary(sm))
+            seen_ids.add(r.summary.id)
+            # Include source info for debug/audit: [topic] [vector] [hybrid]
+            source_tag = f' [{r.source}]' if r.source != 'topic' else ''
+            line = _format_summary(r.summary) + source_tag
+            relevant_lines.append(line)
 
         summary_parts: list[str] = []
         if recent_lines:

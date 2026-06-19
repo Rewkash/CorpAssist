@@ -86,14 +86,15 @@ async def build_assist_context(db: AsyncSession, user: User, conversation_id: in
     """Build LLM context for assist endpoints with access check and long-term client memory.
 
     For workers: combines current conversation + client long-term memory (profile + summaries).
-    The long-term memory uses topic matching: recent summaries + topically relevant
-    older summaries, so that past conversations about the same topic resurface.
+    The long-term memory uses hybrid search: topic-match + vector search with RRF fusion,
+    so that past conversations about the same topic resurface even semantically.
     For clients: returns cross-conversation raw history (unchanged behavior).
     """
     if user.role == 'client':
         return await build_client_context(db, user.id)
     if user.role == 'worker' and conversation_id:
         from app.services.conversation_access import get_accessible_conversation
+        from app.generator import generator_service
         try:
             conversation = await get_accessible_conversation(db, user, conversation_id)
         except Exception:
@@ -110,8 +111,11 @@ async def build_assist_context(db: AsyncSession, user: User, conversation_id: in
                     last_client_msg = line[len('Клиент:'):].strip()
                     break
         current_topics = _extract_current_topics(conversation, last_client_msg)
-        # Long-term memory: client profile + recent + topic-matched summaries
-        memory_context = await build_client_memory_context(db, conversation.client_id, current_topics)
+        # Long-term memory: client profile + recent + hybrid search summaries
+        memory_context = await build_client_memory_context(
+            db, conversation.client_id, current_topics,
+            llm=generator_service._llm,
+        )
         # Combine: memory first, then current conversation
         parts: list[str] = []
         if memory_context:

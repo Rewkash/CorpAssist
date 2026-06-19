@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 import json as _json
 
@@ -7,6 +8,16 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, fun
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+# pgvector integration — optional, graceful fallback if not installed
+try:
+    from pgvector.sqlalchemy import Vector
+    _HAS_PGVECTOR = True
+except ImportError:
+    _HAS_PGVECTOR = False
+    Vector = None  # type: ignore[assignment,misc]
+
+EMBEDDING_DIMENSIONS = 768
 
 
 class Role(StrEnum):
@@ -116,6 +127,12 @@ class ConversationSummary(Base):
     resolution: Mapped[str] = mapped_column(String(50), default='')
     sentiment_trend: Mapped[str] = mapped_column(String(50), default='')
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Vector embedding for semantic search (pgvector). Null if pgvector not available.
+    embedding: Mapped[Any] = mapped_column(
+        Vector(EMBEDDING_DIMENSIONS) if _HAS_PGVECTOR else Text,
+        nullable=True,
+    ) if _HAS_PGVECTOR else mapped_column(Text, nullable=True)
 
     conversation: Mapped[Conversation] = relationship()
 

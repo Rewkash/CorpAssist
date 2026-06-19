@@ -106,3 +106,25 @@ class OllamaClient:
                 raise
             finally:
                 LLM_DEBUG_LOG.append(debug_item)
+
+    async def embed(self, text: str, model: str = 'nomic-embed-text') -> list[float]:
+        """Generate embedding vector for text using Ollama /api/embed endpoint.
+
+        Uses a separate embedding model (default: nomic-embed-text, 768d).
+        Falls back to returning empty list if the embedding model is unavailable.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(
+                    f'{self._base_url}/api/embed',
+                    json={'model': model, 'input': text},
+                )
+                response.raise_for_status()
+                data = response.json()
+                # Ollama /api/embed returns {"model": ..., "embeddings": [[...]]}
+                embeddings = data.get('embeddings', [])
+                if embeddings and isinstance(embeddings[0], list):
+                    return embeddings[0]
+                return []
+            except Exception:
+                return []

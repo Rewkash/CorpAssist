@@ -10,6 +10,7 @@ from app.generator import generator_service
 from app.models import ChatMessage, Conversation, ConversationSummary
 from app.prompts.llm_prompts import SYSTEM_PROMPT_SUMMARIZE
 from app.services.client_memory import update_client_profile_from_summary
+from app.services.embedding_service import embed_conversation_summary
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,13 @@ async def summarize_conversation(db: AsyncSession, conversation: Conversation) -
         logger.exception('Failed to commit summary for conversation %d', conversation.id)
         await db.rollback()
         return None
+
+    # Generate and store vector embedding (async, non-blocking for main flow)
+    try:
+        await embed_conversation_summary(db, generator_service._llm, summary)
+        await db.commit()
+    except Exception:
+        logger.debug('Embedding generation failed for summary %d (non-critical)', summary.id)
 
     logger.info(
         'Generated summary for conversation %d (client_id=%d, topics=%s)',
