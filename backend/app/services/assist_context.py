@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import ChatMessage, Conversation
+from app.models import ChatMessage, Conversation, User
 
 
 async def build_client_context(db: AsyncSession, client_id: int) -> str:
@@ -33,3 +33,17 @@ async def build_conversation_context(db: AsyncSession, conversation: Conversatio
         role = 'Клиент' if item.sender_id == conversation.client_id else 'Оператор'
         result_lines.append(f'{role}: {item.text}')
     return '\n'.join(result_lines)
+
+
+async def build_assist_context(db: AsyncSession, user: User, conversation_id: int | None) -> str:
+    """Build LLM context for assist endpoints with access check for workers."""
+    if user.role == 'client':
+        return await build_client_context(db, user.id)
+    if user.role == 'worker' and conversation_id:
+        from app.services.conversation_access import get_accessible_conversation
+        try:
+            conversation = await get_accessible_conversation(db, user, conversation_id)
+        except Exception:
+            return ''
+        return await build_conversation_context(db, conversation)
+    return ''

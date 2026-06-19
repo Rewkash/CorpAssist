@@ -25,6 +25,7 @@ type RightSidebarProps = {
   role: UserRole
   activeTags: string[]
   suggestedTags: string[]
+  isGeneratingTags: boolean
   frequentTags: string[]
   manualTag: string
   showTagDropdown: boolean
@@ -37,6 +38,7 @@ type RightSidebarProps = {
   onTogglePriority: () => void
   onAddTag: (tag: string) => void
   onRemoveTag: (tag: string) => void
+  onRegenerateTags: () => void
   onManualTagChange: (tag: string) => void
   onShowTagDropdown: () => void
   onHideTagDropdown: () => void
@@ -55,6 +57,7 @@ export function RightSidebar({
   role,
   activeTags,
   suggestedTags,
+  isGeneratingTags,
   frequentTags,
   manualTag,
   showTagDropdown,
@@ -67,6 +70,7 @@ export function RightSidebar({
   onTogglePriority,
   onAddTag,
   onRemoveTag,
+  onRegenerateTags,
   onManualTagChange,
   onShowTagDropdown,
   onHideTagDropdown,
@@ -116,6 +120,18 @@ export function RightSidebar({
 
         <div className="card">
           <div className="cardTitle">Теги и метки</div>
+          {role !== 'client' && (
+            <div className="tagsToolbar">
+              <button
+                className="btn ghostAccent tagRegenerateBtn"
+                onClick={onRegenerateTags}
+                disabled={isGeneratingTags || !conversationId}
+              >
+                {isGeneratingTags ? 'Генерация…' : 'Перегенерировать теги'}
+              </button>
+              {isGeneratingTags && <span className="tagGeneratingHint">ИИ подбирает теги…</span>}
+            </div>
+          )}
           {role !== 'client' && (
             <button
               className={clsx('priorityBtn', activeTags.includes('Срочно') && 'active')}

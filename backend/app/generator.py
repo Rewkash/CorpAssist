@@ -112,7 +112,7 @@ class BusinessTextGenerator:
 
         for _ in range(2):
             try:
-                raw = await self._llm.generate_structured(
+                raw = await self._llm.generate(
                     system_prompt=SYSTEM_PROMPT_TAGS,
                     user_prompt=user_prompt,
                     schema=tag_suggestion_schema(),

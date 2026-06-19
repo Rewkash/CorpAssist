@@ -6,6 +6,7 @@ export function ChatSidebarPanel({
   onTogglePriority,
   onAddTag,
   onRemoveTag,
+  onRegenerateTags,
   ...props
 }: ChatSidebarPanelProps) {
   return (
@@ -14,6 +15,7 @@ export function ChatSidebarPanel({
       onTogglePriority={() => void onTogglePriority()}
       onAddTag={(tag) => void onAddTag(tag)}
       onRemoveTag={(tag) => void onRemoveTag(tag)}
+      onRegenerateTags={() => void onRegenerateTags()}
       formatHistoryDate={formatHistoryDate}
     />
   )

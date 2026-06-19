@@ -65,6 +65,7 @@ export type ChatSidebarPanelProps = {
   role: Role
   activeTags: string[]
   suggestedTags: string[]
+  isGeneratingTags: boolean
   frequentTags: string[]
   manualTag: string
   showTagDropdown: boolean
@@ -77,6 +78,7 @@ export type ChatSidebarPanelProps = {
   onTogglePriority: () => Promise<void>
   onAddTag: (tag: string) => Promise<void>
   onRemoveTag: (tag: string) => Promise<void>
+  onRegenerateTags: () => Promise<void>
   onManualTagChange: (tag: string) => void
   onShowTagDropdown: () => void
   onHideTagDropdown: () => void

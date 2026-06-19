@@ -61,6 +61,7 @@ class OllamaClient:
         temperature: float = 0.7,
         max_tokens: int = 512,
         mode: str = 'generate',
+        schema: dict[str, Any] | None = None,
     ) -> str:
         debug_item: dict[str, Any] = {
             'created_at': datetime.now(timezone.utc).isoformat(),
@@ -74,79 +75,28 @@ class OllamaClient:
             'response': '',
             'error': '',
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            try:
-                response = await client.post(
-                    f'{self._base_url}/api/chat',
-                    json={
-                        'model': self._model,
-                        'messages': [
-                            {'role': 'system', 'content': system_prompt},
-                            {'role': 'user', 'content': user_prompt},
-                        ],
-                        'raw': False,
-                        'stream': False,
-                        'options': {
-                            'temperature': temperature,
-                            'top_p': 0.9,
-                            'num_predict': max_tokens,
-                            'num_ctx': 8192,
-                        },
-                    },
-                )
-                response.raise_for_status()
-                result = response.json()['message']['content'].strip()
-                debug_item['response'] = result
-                return result
-            except Exception as exc:
-                debug_item['error'] = repr(exc)
-                raise
-            finally:
-                LLM_DEBUG_LOG.append(debug_item)
-
-    async def generate_structured(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        schema: dict[str, Any],
-        temperature: float = 0.1,
-        max_tokens: int = 200,
-        mode: str = 'structured',
-    ) -> str:
-        debug_item: dict[str, Any] = {
-            'created_at': datetime.now(timezone.utc).isoformat(),
-            'mode': mode,
+        if schema:
+            debug_item['schema'] = schema
+        payload: dict[str, Any] = {
             'model': self._model,
-            'endpoint': '/api/chat',
-            'temperature': temperature,
-            'max_tokens': max_tokens,
-            'system_prompt': system_prompt,
-            'user_prompt': user_prompt,
-            'schema': schema,
-            'response': '',
-            'error': '',
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            'raw': False,
+            'stream': False,
+            'options': {
+                'temperature': temperature,
+                'top_p': 0.9,
+                'num_predict': max_tokens,
+                'num_ctx': 8192,
+            },
         }
+        if schema:
+            payload['format'] = schema
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
-                response = await client.post(
-                    f'{self._base_url}/api/chat',
-                    json={
-                        'model': self._model,
-                        'messages': [
-                            {'role': 'system', 'content': system_prompt},
-                            {'role': 'user', 'content': user_prompt},
-                        ],
-                        'raw': False,
-                        'stream': False,
-                        'format': schema,
-                        'options': {
-                            'temperature': temperature,
-                            'top_p': 0.9,
-                            'num_predict': max_tokens,
-                            'num_ctx': 8192,
-                        },
-                    },
-                )
+                response = await client.post(f'{self._base_url}/api/chat', json=payload)
                 response.raise_for_status()
                 result = response.json()['message']['content'].strip()
                 debug_item['response'] = result

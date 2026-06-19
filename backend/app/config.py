@@ -1,4 +1,9 @@
+import logging
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -21,6 +26,8 @@ class Settings(BaseSettings):
     ollama_model: str = 'gemma3:4b'
     enable_llm_debug: bool = False
 
+    cors_origin: str = 'http://localhost:5173'
+
     @property
     def database_url(self) -> str:
         return (
@@ -30,3 +37,16 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+_INSECURE_SECRETS = {'change-me-in-production', 'super-secret-demo-key', 'secret', 'password'}
+
+
+def check_jwt_secret() -> None:
+    if os.getenv('JWT_SECRET') and settings.jwt_secret not in _INSECURE_SECRETS:
+        return
+    if settings.jwt_secret in _INSECURE_SECRETS:
+        logger.warning(
+            'JWT_SECRET uses an insecure default value (%r). '
+            'Set a strong JWT_SECRET environment variable before deploying to production.',
+            settings.jwt_secret,
+        )

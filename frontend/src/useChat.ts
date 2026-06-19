@@ -10,6 +10,57 @@ type UseChatParams = {
   onConnectionStateChange?: (isConnected: boolean) => void
 }
 
+/** Generic reconnecting WebSocket helper shared between the two sockets. */
+function connectWithReconnect(opts: {
+  createSocket: () => WebSocket
+  onMessage: (data: unknown) => void
+  onOpen?: () => void
+  onClose?: () => void
+  socketRef: React.MutableRefObject<WebSocket | null>
+  timerRef: React.MutableRefObject<number | null>
+  attemptRef: React.MutableRefObject<number>
+  aliveRef: { value: boolean }
+}) {
+  const { createSocket, onMessage, onOpen, onClose, socketRef, timerRef, attemptRef, aliveRef } = opts
+
+  const clearTimer = () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }
+
+  const connect = () => {
+    if (!aliveRef.value) return
+    const socket = createSocket()
+    socketRef.current = socket
+
+    socket.onopen = () => {
+      attemptRef.current = 0
+      onOpen?.()
+    }
+
+    socket.onmessage = (event) => {
+      onMessage(JSON.parse(event.data))
+    }
+
+    socket.onclose = () => {
+      onClose?.()
+      if (!aliveRef.value) return
+      const attempt = attemptRef.current + 1
+      attemptRef.current = attempt
+      const delay = Math.min(1000 * 2 ** (attempt - 1), 15000)
+      timerRef.current = window.setTimeout(connect, delay)
+    }
+
+    socket.onerror = () => {
+      socket.close()
+    }
+  }
+
+  return { connect, clearTimer }
+}
+
 export function useChat({ token, conversationId, onMessageCreated, onConversationsSnapshot, onConnectionStateChange }: UseChatParams) {
   const socketRef = useRef<WebSocket | null>(null)
   const updatesSocketRef = useRef<WebSocket | null>(null)
@@ -35,155 +86,98 @@ export function useChat({ token, conversationId, onMessageCreated, onConversatio
   }, [onConnectionStateChange])
 
   useEffect(() => {
-    const clearReconnect = () => {
-      if (reconnectTimerRef.current !== null) {
-        window.clearTimeout(reconnectTimerRef.current)
-        reconnectTimerRef.current = null
+    const cleanupSocket = (
+      socketRef: React.MutableRefObject<WebSocket | null>,
+      timerRef: React.MutableRefObject<number | null>,
+      attemptRef: React.MutableRefObject<number>,
+    ) => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current)
+        timerRef.current = null
       }
-    }
-
-    const clearUpdatesReconnect = () => {
-      if (updatesReconnectTimerRef.current !== null) {
-        window.clearTimeout(updatesReconnectTimerRef.current)
-        updatesReconnectTimerRef.current = null
-      }
-    }
-
-    const connectUpdates = (aliveRef: { value: boolean }, authToken: string) => {
-      if (!aliveRef.value) return
-      const socket = createChatUpdatesSocket(authToken)
-      updatesSocketRef.current = socket
-
-      socket.onopen = () => {
-        updatesReconnectAttemptRef.current = 0
-      }
-
-      socket.onmessage = (event) => {
-        const payload = JSON.parse(event.data)
-        if (payload.type === 'conversations_snapshot' && Array.isArray(payload.payload)) {
-          onConversationsSnapshotRef.current(payload.payload as Conversation[])
-        }
-      }
-
-      socket.onclose = () => {
-        if (!aliveRef.value) return
-        const attempt = updatesReconnectAttemptRef.current + 1
-        updatesReconnectAttemptRef.current = attempt
-        const delay = Math.min(1000 * 2 ** (attempt - 1), 15000)
-        updatesReconnectTimerRef.current = window.setTimeout(() => connectUpdates(aliveRef, authToken), delay)
-      }
-
-      socket.onerror = () => {
-        socket.close()
-      }
-    }
-
-    if (!token) {
-      clearReconnect()
-      clearUpdatesReconnect()
-      reconnectAttemptRef.current = 0
-      updatesReconnectAttemptRef.current = 0
+      attemptRef.current = 0
       if (socketRef.current) {
         socketRef.current.close()
         socketRef.current = null
       }
-      if (updatesSocketRef.current) {
-        updatesSocketRef.current.close()
-        updatesSocketRef.current = null
-      }
+    }
+
+    const setDisconnected = () => {
       setConnected(false)
-       onConnectionStateChangeRef.current?.(false)
+      onConnectionStateChangeRef.current?.(false)
+    }
+
+    if (!token) {
+      cleanupSocket(socketRef, reconnectTimerRef, reconnectAttemptRef)
+      cleanupSocket(updatesSocketRef, updatesReconnectTimerRef, updatesReconnectAttemptRef)
+      setDisconnected()
       return
     }
 
     let alive = true
     const aliveRef = { value: true }
-    connectUpdates(aliveRef, token)
+
+    // Updates socket (conversations list)
+    const updatesConnector = connectWithReconnect({
+      createSocket: () => createChatUpdatesSocket(token),
+      onMessage: (data: unknown) => {
+        const payload = data as { type: string; payload: unknown }
+        if (payload.type === 'conversations_snapshot' && Array.isArray(payload.payload)) {
+          onConversationsSnapshotRef.current(payload.payload as Conversation[])
+        }
+      },
+      socketRef: updatesSocketRef,
+      timerRef: updatesReconnectTimerRef,
+      attemptRef: updatesReconnectAttemptRef,
+      aliveRef,
+    })
+    updatesConnector.connect()
 
     if (!conversationId) {
-      clearReconnect()
-      reconnectAttemptRef.current = 0
-      if (socketRef.current) {
-        socketRef.current.close()
-        socketRef.current = null
-      }
-      setConnected(false)
-      onConnectionStateChangeRef.current?.(false)
+      cleanupSocket(socketRef, reconnectTimerRef, reconnectAttemptRef)
+      setDisconnected()
+
       return () => {
         alive = false
         aliveRef.value = false
-        clearReconnect()
-        clearUpdatesReconnect()
-        reconnectAttemptRef.current = 0
-        updatesReconnectAttemptRef.current = 0
-        if (socketRef.current) {
-          socketRef.current.close()
-          socketRef.current = null
-        }
-        if (updatesSocketRef.current) {
-          updatesSocketRef.current.close()
-          updatesSocketRef.current = null
-        }
-        setConnected(false)
-        onConnectionStateChangeRef.current?.(false)
+        cleanupSocket(socketRef, reconnectTimerRef, reconnectAttemptRef)
+        cleanupSocket(updatesSocketRef, updatesReconnectTimerRef, updatesReconnectAttemptRef)
+        setDisconnected()
       }
     }
 
-    const connect = () => {
-      if (!alive) return
-      const socket = createChatSocket(token, conversationId)
-      socketRef.current = socket
-
-      socket.onopen = () => {
-        reconnectAttemptRef.current = 0
-        setConnected(true)
-        onConnectionStateChangeRef.current?.(true)
-      }
-
-      socket.onmessage = (event) => {
-        const payload = JSON.parse(event.data)
+    // Chat socket (messages)
+    const chatConnector = connectWithReconnect({
+      createSocket: () => createChatSocket(token, conversationId),
+      onMessage: (data: unknown) => {
+        const payload = data as { type: string; payload: unknown }
         if (payload.type === 'message_created' && payload.payload) {
           onMessageCreatedRef.current(payload.payload as ChatMessage)
         }
         if (payload.type === 'conversations_snapshot' && Array.isArray(payload.payload)) {
           onConversationsSnapshotRef.current(payload.payload as Conversation[])
         }
-      }
-
-      socket.onclose = () => {
-        setConnected(false)
-        onConnectionStateChangeRef.current?.(false)
-        if (!alive) return
-        const attempt = reconnectAttemptRef.current + 1
-        reconnectAttemptRef.current = attempt
-        const delay = Math.min(1000 * 2 ** (attempt - 1), 15000)
-        reconnectTimerRef.current = window.setTimeout(connect, delay)
-      }
-
-      socket.onerror = () => {
-        socket.close()
-      }
-    }
-
-    connect()
+      },
+      onOpen: () => {
+        setConnected(true)
+        onConnectionStateChangeRef.current?.(true)
+      },
+      onClose: () => {
+        setDisconnected()
+      },
+      socketRef,
+      timerRef: reconnectTimerRef,
+      attemptRef: reconnectAttemptRef,
+      aliveRef,
+    })
+    chatConnector.connect()
 
     return () => {
       alive = false
       aliveRef.value = false
-      clearReconnect()
-      clearUpdatesReconnect()
-      reconnectAttemptRef.current = 0
-      updatesReconnectAttemptRef.current = 0
-      if (socketRef.current) {
-        socketRef.current.close()
-        socketRef.current = null
-      }
-      if (updatesSocketRef.current) {
-        updatesSocketRef.current.close()
-        updatesSocketRef.current = null
-      }
-      setConnected(false)
-      onConnectionStateChangeRef.current?.(false)
+      cleanupSocket(socketRef, reconnectTimerRef, reconnectAttemptRef)
+      cleanupSocket(updatesSocketRef, updatesReconnectTimerRef, updatesReconnectAttemptRef)
+      setDisconnected()
     }
   }, [token, conversationId])
 

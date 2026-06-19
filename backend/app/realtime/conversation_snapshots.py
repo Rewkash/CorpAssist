@@ -19,9 +19,15 @@ async def push_conversations_snapshot(
     admin_result = await db.execute(select(User.id).where(User.role == 'admin'))
     target_user_ids.update(row.id for row in admin_result.all())
 
+    if not target_user_ids:
+        return
+
+    # Fetch all target users in one query instead of N individual lookups
+    viewers_result = await db.execute(select(User).where(User.id.in_(target_user_ids)))
+    viewers = {viewer.id: viewer for viewer in viewers_result.scalars().all()}
+
     for user_id in target_user_ids:
-        user_result = await db.execute(select(User).where(User.id == user_id))
-        viewer = user_result.scalar_one_or_none()
+        viewer = viewers.get(user_id)
         if not viewer:
             continue
         items = await list_conversations_for_user(db, viewer)

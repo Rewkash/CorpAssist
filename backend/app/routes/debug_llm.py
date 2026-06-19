@@ -1,17 +1,42 @@
 import json
 from html import escape
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import decode_access_token
+from app.database import get_db
 from app.generator import generator_service, get_llm_debug_log
-
+from app.models import User
 
 router = APIRouter()
 
 
+async def require_admin_token(
+    request: Request,
+    token: str = Query(default='', alias='token'),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Auth for debug page: accept token via query param or Authorization header."""
+    email = None
+    auth_header = request.headers.get('authorization', '')
+    if auth_header.startswith('Bearer '):
+        email = decode_access_token(auth_header[7:])
+    elif token:
+        email = decode_access_token(token)
+    if not email:
+        raise HTTPException(status_code=401, detail='Unauthorized')
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user or user.role != 'admin':
+        raise HTTPException(status_code=403, detail='Admin role required')
+    return user
+
+
 @router.get('/debug/llm', response_class=HTMLResponse, include_in_schema=False)
-async def llm_debug_page() -> str:
+async def llm_debug_page(admin: User = Depends(require_admin_token)) -> str:
     current_model = generator_service.model
     model_error = ''
     try:
@@ -97,7 +122,7 @@ async def llm_debug_page() -> str:
           <div id="model-status" class="hint">Текущая модель: {escape(current_model)}</div>
           {'<div class="error">' + escape(model_error) + '</div>' if model_error else ''}
         </div>
-        <a href="/debug/llm">обновить</a>
+        <a id="refresh-link" href="/debug/llm">обновить</a>
       </header>
       {body}
       <script>
@@ -107,6 +132,9 @@ async def llm_debug_page() -> str:
         const unloadButton = document.getElementById('model-unload');
         const stopButton = document.getElementById('model-stop');
         const statusEl = document.getElementById('model-status');
+        const qsToken = new URLSearchParams(location.search).get('token');
+        if (qsToken) document.getElementById('refresh-link').href = '/debug/llm?token=' + encodeURIComponent(qsToken);
+        const authHeaders = qsToken ? {{ 'Authorization': 'Bearer ' + qsToken, 'Content-Type': 'application/json' }} : {{ 'Content-Type': 'application/json' }};
 
         function setControlsDisabled(disabled) {{
           button.disabled = disabled;
@@ -123,7 +151,7 @@ async def llm_debug_page() -> str:
           statusEl.textContent = `Выгружается старая модель и загружается ${{selectedModel}}...`;
           const response = await fetch('/debug/llm/model', {{
             method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
+            headers: authHeaders,
             body: JSON.stringify({{ model: selectedModel }})
           }});
           const data = await response.json();
@@ -142,7 +170,7 @@ async def llm_debug_page() -> str:
         unloadButton.addEventListener('click', async () => {{
           setControlsDisabled(true);
           statusEl.textContent = `Выгружается модель ${{select.value}}...`;
-          const response = await fetch('/debug/llm/unload', {{ method: 'POST' }});
+          const response = await fetch('/debug/llm/unload', {{ method: 'POST', headers: authHeaders }});
           const data = await response.json();
           statusEl.textContent = data.status || 'Модель выгружена';
           setControlsDisabled(false);
@@ -152,7 +180,7 @@ async def llm_debug_page() -> str:
         stopButton.addEventListener('click', async () => {{
           setControlsDisabled(true);
           statusEl.textContent = 'Останавливается загрузка и очищается выбранная модель...';
-          const response = await fetch('/debug/llm/stop-loading', {{ method: 'POST' }});
+          const response = await fetch('/debug/llm/stop-loading', {{ method: 'POST', headers: authHeaders }});
           const data = await response.json();
           statusEl.textContent = data.status || 'Загрузка остановлена';
           setControlsDisabled(false);
@@ -165,7 +193,7 @@ async def llm_debug_page() -> str:
 
 
 @router.post('/debug/llm/model', include_in_schema=False)
-async def set_llm_debug_model(payload: dict[str, str]) -> JSONResponse:
+async def set_llm_debug_model(payload: dict[str, str], _: User = Depends(require_admin_token)) -> JSONResponse:
     model = (payload.get('model') or '').strip()
     if not model:
         return JSONResponse({'ok': False, 'status': 'Модель не указана'}, status_code=400)
@@ -182,7 +210,7 @@ async def set_llm_debug_model(payload: dict[str, str]) -> JSONResponse:
 
 
 @router.post('/debug/llm/unload', include_in_schema=False)
-async def unload_llm_debug_model() -> JSONResponse:
+async def unload_llm_debug_model(_: User = Depends(require_admin_token)) -> JSONResponse:
     if generator_service.model_loading:
         return JSONResponse({'ok': False, 'status': generator_service.model_status}, status_code=409)
     try:
@@ -193,7 +221,7 @@ async def unload_llm_debug_model() -> JSONResponse:
 
 
 @router.post('/debug/llm/stop-loading', include_in_schema=False)
-async def stop_llm_loading() -> JSONResponse:
+async def stop_llm_loading(_: User = Depends(require_admin_token)) -> JSONResponse:
     try:
         await generator_service.cancel_loading_and_clear()
     except Exception as exc:

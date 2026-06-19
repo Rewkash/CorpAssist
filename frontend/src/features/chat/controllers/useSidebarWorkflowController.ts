@@ -21,7 +21,7 @@ export function useSidebarWorkflowController({ token, conversationId, role }: Us
   const setAssignClientId = useChatStore((state) => state.setAssignClientId)
   const setAssignWorkerId = useChatStore((state) => state.setAssignWorkerId)
   const sidebarUi = useSidebarUiState()
-  const suggestedTags = useSuggestedTags({ token, conversationId, role })
+  const { suggestedTags, isGeneratingTags, regenerateTags } = useSuggestedTags({ token, conversationId, role })
 
   const hideTagDropdown = useCallback(() => {
     sidebarUi.setShowTagDropdown(false)
@@ -43,6 +43,8 @@ export function useSidebarWorkflowController({ token, conversationId, role }: Us
     setAssignClientId,
     setAssignWorkerId,
     suggestedTags,
+    isGeneratingTags,
+    onRegenerateTags: regenerateTags,
     onShowTagDropdown: showTagDropdown,
     onHideTagDropdown: hideTagDropdown,
   }

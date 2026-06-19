@@ -1,9 +1,18 @@
 from datetime import datetime
+from enum import StrEnum
+
+import json as _json
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+class Role(StrEnum):
+    CLIENT = 'client'
+    WORKER = 'worker'
+    ADMIN = 'admin'
 
 
 class User(Base):
@@ -12,7 +21,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(20), default='client', index=True)
+    role: Mapped[str] = mapped_column(String(20), default=Role.CLIENT, index=True)
     assigned_worker_id: Mapped[int | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -61,6 +70,22 @@ class Conversation(Base):
     client: Mapped[User] = relationship(foreign_keys=[client_id], back_populates='client_conversations')
     worker: Mapped[User | None] = relationship(foreign_keys=[worker_id], back_populates='worker_conversations')
     messages: Mapped[list['ChatMessage']] = relationship(back_populates='conversation', cascade='all, delete-orphan')
+
+    def get_tags(self) -> list[str]:
+        """Parse tags JSON column into a clean list."""
+        if not self.tags:
+            return []
+        try:
+            loaded = _json.loads(self.tags)
+            if isinstance(loaded, list):
+                return [str(tag).strip() for tag in loaded if str(tag).strip()]
+        except Exception:
+            pass
+        return []
+
+    def set_tags(self, tags: list[str]) -> None:
+        """Serialize a list of tags into the JSON column."""
+        self.tags = _json.dumps([t.strip() for t in tags if t.strip()], ensure_ascii=False)
 
 
 class ChatMessage(Base):

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections import Counter
 from difflib import SequenceMatcher
 
@@ -7,20 +8,33 @@ from transformers import pipeline
 
 from app.schemas import AnalysisResult, DiffChunk
 
+logger = logging.getLogger(__name__)
+
 
 class NlpService:
     def __init__(self) -> None:
+        self._nlp: object | None = None
+        self._sentiment_pipe: object | None = None
+
+    def _ensure_initialized(self) -> None:
+        """Lazy-load heavy models on first use instead of at import time."""
+        if self._nlp is not None:
+            return
+        logger.info('NlpService: loading spacy + sentiment model (first call)...')
         self._nlp = spacy.blank('ru')
         self._sentiment_pipe = pipeline(
             'text-classification',
             model='blanchefort/rubert-base-cased-sentiment',
             return_all_scores=False,
         )
+        logger.info('NlpService: models loaded.')
 
     async def analyze(self, text: str) -> AnalysisResult:
+        self._ensure_initialized()
         return await asyncio.to_thread(self._analyze_sync, text)
 
     def _analyze_sync(self, text: str) -> AnalysisResult:
+        assert self._nlp is not None and self._sentiment_pipe is not None
         doc = self._nlp(text)
         tokens = [t.text.lower() for t in doc if t.is_alpha and not t.is_stop and len(t.text) > 3]
         topics = [w for w, _ in Counter(tokens).most_common(5)]
@@ -46,7 +60,9 @@ class NlpService:
         if not topics:
             topics = ['общее обсуждение']
 
-        return AnalysisResult(sentiment=sentiment, topics=topics, formality=formality)
+        return AnalysisResult(sentiment=sentiment,
+                              topics=topics,
+                              formality=formality)
 
     @staticmethod
     def make_diff(source: str, target: str) -> list[DiffChunk]:

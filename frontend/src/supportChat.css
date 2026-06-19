@@ -550,6 +550,9 @@
 .supportRoot .tagClose { border: none; background: transparent; color: #8f92a8; cursor: pointer; padding: 0; font-size: 13px; line-height: 1; }
 .supportRoot .tagAddBtn { border: 1px dashed #4a4a5b; background: #14141a; color: #cfd2e7; border-radius: 999px; padding: 5px 10px; font-size: 11px; cursor: pointer; }
 .supportRoot .tagManualRow { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.supportRoot .tagsToolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.supportRoot .tagRegenerateBtn { font-size: 12px; padding: 6px 12px; }
+.supportRoot .tagGeneratingHint { font-size: 11px; color: #8aa0ff; }
 .supportRoot .tagInputWrap { position: relative; }
 .supportRoot .tagDropdown {
   position: absolute;

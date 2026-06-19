@@ -1,7 +1,5 @@
-import json
-
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, text
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -123,26 +121,27 @@ async def take_conversation(
 @router.get('/chat/messages/{conversation_id}', response_model=list[ChatMessageItem])
 async def chat_messages(
     conversation_id: int,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[ChatMessageItem]:
     await get_accessible_conversation(db, user, conversation_id)
 
     await db.execute(
-        text(
-            """
-            UPDATE chat_messages
-            SET status = 'delivered'
-            WHERE conversation_id = :conversation_id
-              AND sender_id != :viewer_id
-              AND status = 'sent'
-            """
-        ),
-        {'conversation_id': conversation_id, 'viewer_id': user.id},
+        update(ChatMessage)
+        .where(ChatMessage.conversation_id == conversation_id, ChatMessage.sender_id != user.id, ChatMessage.status == 'sent')
+        .values(status='delivered')
     )
     await db.commit()
 
-    result = await db.execute(select(ChatMessage).where(ChatMessage.conversation_id == conversation_id).order_by(ChatMessage.created_at.asc()))
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.conversation_id == conversation_id)
+        .order_by(ChatMessage.created_at.asc())
+        .offset(offset)
+        .limit(limit)
+    )
     return [ChatMessageItem.model_validate(row) for row in result.scalars().all()]
 
 
@@ -186,16 +185,13 @@ async def mark_messages_read(
     conversation = await get_accessible_conversation(db, user, payload.conversation_id)
 
     await db.execute(
-        text(
-            """
-            UPDATE chat_messages
-            SET status = 'read', read_at = NOW()
-            WHERE conversation_id = :conversation_id
-              AND sender_id != :viewer_id
-              AND status IN ('sent', 'delivered')
-            """
-        ),
-        {'conversation_id': payload.conversation_id, 'viewer_id': user.id},
+        update(ChatMessage)
+        .where(
+            ChatMessage.conversation_id == payload.conversation_id,
+            ChatMessage.sender_id != user.id,
+            ChatMessage.status.in_(['sent', 'delivered']),
+        )
+        .values(status='read', read_at=func.now())
     )
     await db.commit()
     await chat_hub.send_to_conversation(
@@ -228,7 +224,7 @@ async def close_conversation(
         raise HTTPException(status_code=403, detail='Нет доступа к закрытию этого диалога')
 
     conversation.status = 'closed'
-    await db.execute(text('UPDATE conversations SET closed_at = NOW() WHERE id = :id'), {'id': conversation.id})
+    conversation.closed_at = func.now()
     await db.commit()
     await db.refresh(conversation)
     items = await build_conversation_items(db, user, [conversation])
@@ -255,6 +251,26 @@ async def suggest_conversation_tags(
     )
 
 
+@router.post('/chat/conversations/{conversation_id}/regenerate-tags')
+async def regenerate_conversation_tags(
+    conversation_id: int,
+    user: User = Depends(require_role('worker', 'admin')),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, list[str]]:
+    user_hub = get_user_socket_hub()
+
+    async def push_snapshot(db: AsyncSession, conversation: Conversation) -> None:
+        await push_conversations_snapshot(db, conversation, user_socket_hub=user_hub)
+
+    return await suggest_conversation_tags_for_user(
+        db=db,
+        conversation_id=conversation_id,
+        user=user,
+        push_snapshot=push_snapshot,
+        force=True,
+    )
+
+
 @router.post('/chat/conversations/tags', response_model=ConversationItem)
 async def set_conversation_tags(
     payload: SetConversationTagsRequest,
@@ -274,11 +290,11 @@ async def set_conversation_tags(
         tag = raw_tag.strip()
         if tag and tag not in normalized_tags:
             normalized_tags.append(tag)
-    conversation.tags = json.dumps(normalized_tags, ensure_ascii=False)
+    conversation.set_tags(normalized_tags)
 
     has_priority = any(tag.lower() in ('приоритет', 'срочно') for tag in normalized_tags)
     if has_priority and conversation.priority_at is None:
-        await db.execute(text('UPDATE conversations SET priority_at = NOW() WHERE id = :id'), {'id': conversation.id})
+        conversation.priority_at = func.now()
     if not has_priority:
         conversation.priority_at = None
 

@@ -5,30 +5,38 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import decode_access_token
-from app.config import settings
+from app.config import check_jwt_secret, settings
 from app.database import AsyncSessionLocal
 from app.generator import generator_service
-from app.models import Conversation, User
+from app.models import User
 from app.nlp import nlp_service
 from app.realtime.hubs import ChatSocketClient, ChatSocketHub, UserSocketHub
 from app.routes import admin, assist, auth, chat, debug_llm
-from app.services.assist_context import build_client_context
+from app.services.assist_context import build_assist_context
 from app.services.conversation_access import get_accessible_conversation
+
+limiter = Limiter(key_func=get_remote_address, default_limits=['120/minute'])
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    check_jwt_secret()
     yield
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
+    allow_origins=[settings.cors_origin],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
@@ -129,41 +137,34 @@ async def assist_ws(websocket: WebSocket):
             await websocket.close(code=1008)
             return
 
-    await websocket.accept()
-    try:
-        while True:
-            raw = await websocket.receive_text()
-            payload = json.loads(raw)
-            mode = payload.get('mode')
-            text = (payload.get('text') or '').strip()
-            conversation_id = payload.get('conversation_id')
-            if len(text) < 5:
-                await websocket.send_json({'type': 'error', 'message': 'Введите более содержательный текст'})
-                continue
-            if generator_service.model_loading:
-                await websocket.send_json({'type': 'error', 'message': generator_service.model_status})
-                continue
+        await websocket.accept()
+        try:
+            while True:
+                raw = await websocket.receive_text()
+                payload = json.loads(raw)
+                mode = payload.get('mode')
+                text = (payload.get('text') or '').strip()
+                conversation_id = payload.get('conversation_id')
+                if len(text) < 5:
+                    await websocket.send_json({'type': 'error', 'message': 'Введите более содержательный текст'})
+                    continue
+                if generator_service.model_loading:
+                    await websocket.send_json({'type': 'error', 'message': generator_service.model_status})
+                    continue
 
-            analysis = await nlp_service.analyze(text)
-            await websocket.send_json({'type': 'analysis', 'payload': analysis.model_dump()})
-            await websocket.send_json({'type': 'generating', 'message': 'Генерация ответа нейросетью...'})
+                analysis = await nlp_service.analyze(text)
+                await websocket.send_json({'type': 'analysis', 'payload': analysis.model_dump()})
+                await websocket.send_json({'type': 'generating', 'message': 'Генерация ответа нейросетью...'})
 
-            if mode == 'reply':
-                context = ''
-                if user.role == 'client':
-                    context = await build_client_context(db, user.id)
-                elif user.role == 'worker' and conversation_id:
-                    conv_result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
-                    conv = conv_result.scalar_one_or_none()
-                    if conv and conv.client_id:
-                        context = await build_client_context(db, conv.client_id)
-                suggestions = await generator_service.suggest_replies(text, analysis, context)
-                await websocket.send_json({'type': 'reply_suggestions', 'payload': suggestions})
-            elif mode == 'improve':
-                improved = await generator_service.improve_draft(text, analysis)
-                diff = [chunk.model_dump() for chunk in nlp_service.make_diff(text, improved)]
-                await websocket.send_json({'type': 'improved', 'payload': {'text': improved, 'diff': diff}})
-            else:
-                await websocket.send_json({'type': 'error', 'message': 'Неизвестная команда'})
-    except WebSocketDisconnect:
-        return
+                if mode == 'reply':
+                    context = await build_assist_context(db, user, conversation_id)
+                    suggestions = await generator_service.suggest_replies(text, analysis, context)
+                    await websocket.send_json({'type': 'reply_suggestions', 'payload': suggestions})
+                elif mode == 'improve':
+                    improved = await generator_service.improve_draft(text, analysis)
+                    diff = [chunk.model_dump() for chunk in nlp_service.make_diff(text, improved)]
+                    await websocket.send_json({'type': 'improved', 'payload': {'text': improved, 'diff': diff}})
+                else:
+                    await websocket.send_json({'type': 'error', 'message': 'Неизвестная команда'})
+        except WebSocketDisconnect:
+            return
