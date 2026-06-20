@@ -7,7 +7,10 @@ from app.deps import get_current_user
 from app.generator import generator_service
 from app.models import MessageHistory, User
 from app.nlp import nlp_service
-from app.schemas import HistoryItem, ImproveDraftRequest, ImproveDraftResponse, SuggestReplyRequest, SuggestReplyResponse
+from app.schemas import (
+    HistoryItem, ImproveDraftRequest, ImproveDraftResponse,
+    SuggestReplyRequest, SuggestReplyResponse,
+)
 from app.services.assist_context import build_assist_context
 from app.services.llm_guard import ensure_llm_ready
 
@@ -22,7 +25,7 @@ async def suggest_reply(
 ) -> SuggestReplyResponse:
     ensure_llm_ready()
     analysis = await nlp_service.analyze(payload.text)
-    context = await build_assist_context(db, user, payload.conversation_id)
+    context = await build_assist_context(db, user, payload.conversation_id, strategy=payload.strategy)
     suggestions = await generator_service.suggest_replies(payload.text, analysis, context)
 
     response = SuggestReplyResponse(analysis=analysis, suggestions=suggestions)
@@ -50,7 +53,7 @@ async def improve_draft(
 ) -> ImproveDraftResponse:
     ensure_llm_ready()
     analysis = await nlp_service.analyze(payload.text)
-    context = await build_assist_context(db, user, payload.conversation_id)
+    context = await build_assist_context(db, user, payload.conversation_id, strategy=payload.strategy)
     improved = await generator_service.improve_draft(payload.text, analysis, context)
     diff = nlp_service.make_diff(payload.text, improved)
 

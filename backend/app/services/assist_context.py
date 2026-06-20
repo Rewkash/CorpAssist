@@ -82,12 +82,17 @@ def _extract_current_topics(conversation: Conversation, last_client_message: str
     return topics
 
 
-async def build_assist_context(db: AsyncSession, user: User, conversation_id: int | None) -> str:
+async def build_assist_context(
+    db: AsyncSession,
+    user: User,
+    conversation_id: int | None,
+    strategy: str = 'hybrid',
+) -> str:
     """Build LLM context for assist endpoints with access check and long-term client memory.
 
-    For workers: combines current conversation + client long-term memory (profile + summaries).
-    The long-term memory uses hybrid search: topic-match + vector search with RRF fusion,
-    so that past conversations about the same topic resurface even semantically.
+    For workers: combines current conversation + client long-term memory.
+    The `strategy` parameter controls which memory retrieval approach is used:
+    'none', 'recent', 'topic', 'hybrid', 'hybrid_decay'.
     For clients: returns cross-conversation raw history (unchanged behavior).
     """
     if user.role == 'client':
@@ -99,24 +104,21 @@ async def build_assist_context(db: AsyncSession, user: User, conversation_id: in
             conversation = await get_accessible_conversation(db, user, conversation_id)
         except Exception:
             return ''
-        # Current conversation messages
         current_context = await build_conversation_context(db, conversation)
-        # Extract topics from current dialog for relevance matching
-        # Try conversation tags first; fall back to last client message
         last_client_msg = ''
         if current_context:
-            # Find last line starting with "Клиент:"
             for line in reversed(current_context.splitlines()):
                 if line.startswith('Клиент:'):
                     last_client_msg = line[len('Клиент:'):].strip()
                     break
         current_topics = _extract_current_topics(conversation, last_client_msg)
-        # Long-term memory: client profile + recent + hybrid search summaries
+        # Long-term memory: client profile + recent + search-relevant summaries
         memory_context = await build_client_memory_context(
             db, conversation.client_id, current_topics,
             llm=generator_service._llm,
+            conversation_id=conversation_id,
+            strategy=strategy,
         )
-        # Combine: memory first, then current conversation
         parts: list[str] = []
         if memory_context:
             parts.append(memory_context)

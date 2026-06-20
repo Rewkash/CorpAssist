@@ -87,6 +87,7 @@ class AnalysisResult(BaseModel):
 class SuggestReplyRequest(BaseModel):
     text: str = Field(min_length=5, max_length=8000)
     conversation_id: int | None = None
+    strategy: str = 'hybrid'  # none/recent/topic/hybrid/hybrid_decay
 
 
 class SuggestReplyResponse(BaseModel):
@@ -97,6 +98,7 @@ class SuggestReplyResponse(BaseModel):
 class ImproveDraftRequest(BaseModel):
     text: str = Field(min_length=5, max_length=8000)
     conversation_id: int | None = None
+    strategy: str = 'hybrid'  # none/recent/topic/hybrid/hybrid_decay
 
 
 class DiffChunk(BaseModel):

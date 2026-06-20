@@ -4,7 +4,7 @@ from typing import Any
 
 import json as _json
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -180,3 +180,38 @@ class ClientProfile(Base):
 
     def set_common_topics(self, topics: list[str]) -> None:
         self.common_topics = _json.dumps([t.strip() for t in topics if t.strip()], ensure_ascii=False)
+
+
+class RAGSearchLog(Base):
+    """Log of each RAG search act for evaluation and analytics."""
+    __tablename__ = 'rag_search_logs'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    client_id: Mapped[int] = mapped_column(Integer, index=True)
+    conversation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    current_topics: Mapped[str] = mapped_column(Text, default='[]')
+    strategy: Mapped[str] = mapped_column(String(32), index=True)  # none/recent/topic/hybrid/hybrid_decay
+    results_count: Mapped[int] = mapped_column(Integer, default=0)
+    topic_hits: Mapped[int] = mapped_column(Integer, default=0)
+    vector_hits: Mapped[int] = mapped_column(Integer, default=0)
+    rrf_scores: Mapped[str] = mapped_column(Text, default='[]')  # JSON list of floats
+    hit_summary_ids: Mapped[str] = mapped_column(Text, default='[]')  # JSON list of ints
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class EvaluationLog(Base):
+    """LLM-as-Judge evaluation of AI-generated responses."""
+    __tablename__ = 'llm_evaluations'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    message_history_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    strategy: Mapped[str] = mapped_column(String(32), index=True)  # memory strategy used
+    relevance: Mapped[int] = mapped_column(Integer, default=0)  # 1-5
+    politeness: Mapped[int] = mapped_column(Integer, default=0)  # 1-5
+    completeness: Mapped[int] = mapped_column(Integer, default=0)  # 1-5
+    accuracy: Mapped[int] = mapped_column(Integer, default=0)  # 1-5
+    overall: Mapped[float] = mapped_column(Float, default=0.0)  # mean of 4 criteria
+    judge_model: Mapped[str] = mapped_column(String(64), default='')
+    judge_raw: Mapped[str] = mapped_column(Text, default='')  # raw LLM output for audit
