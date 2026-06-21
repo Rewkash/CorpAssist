@@ -54,11 +54,13 @@ class MessageHistory(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), index=True)
     mode: Mapped[str] = mapped_column(String(32), index=True)
+    strategy: Mapped[str] = mapped_column(String(32), default='hybrid', index=True)
     source_text: Mapped[str] = mapped_column(Text)
     result_text: Mapped[str] = mapped_column(Text)
     sentiment: Mapped[str] = mapped_column(String(32))
     topics: Mapped[str] = mapped_column(String(255))
     formality: Mapped[str] = mapped_column(String(32))
+    context_length_chars: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     user: Mapped[User] = relationship(back_populates='history')
@@ -207,6 +209,7 @@ class EvaluationLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     message_history_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    rag_search_log_id: Mapped[int | None] = mapped_column(ForeignKey('rag_search_logs.id'), nullable=True, index=True)
     strategy: Mapped[str] = mapped_column(String(32), index=True)  # memory strategy used
     relevance: Mapped[int] = mapped_column(Integer, default=0)  # 1-5
     politeness: Mapped[int] = mapped_column(Integer, default=0)  # 1-5

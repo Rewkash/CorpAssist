@@ -4,6 +4,7 @@ Configurable retrieval strategies for evaluation:
   'none'         → no memory (baseline for comparison)
   'recent'       → only last N summaries (no search)
   'topic'        → recent + topic-match
+  'vector'       → recent + vector search only
   'hybrid'       → recent + topic + vector + RRF
   'hybrid_decay' → recent + hybrid + temporal decay
 
@@ -142,12 +143,12 @@ async def build_client_memory_context(
     relevant_results: list = []
     metrics = SearchMetrics(client_id=client_id, current_topics=current_topics or [], strategy=strategy)
 
-    if strategy in ('topic', 'hybrid', 'hybrid_decay'):
+    if strategy in ('topic', 'vector', 'hybrid', 'hybrid_decay'):
         current_topics = current_topics or []
 
         # Try to generate query embedding for vector search
         query_embedding: list[float] = []
-        if strategy in ('hybrid', 'hybrid_decay') and llm and current_topics:
+        if strategy in ('vector', 'hybrid', 'hybrid_decay') and llm and current_topics:
             try:
                 query_text = ' '.join(current_topics)
                 query_embedding = await embed_query(llm, query_text)

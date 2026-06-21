@@ -62,6 +62,7 @@ async def evaluate_response(
     strategy: str = 'none',
     message_history_id: int | None = None,
     context: str = '',
+    rag_search_log_id: int | None = None,
 ) -> EvaluationLog | None:
     """Evaluate a single operator response using LLM-as-Judge.
 
@@ -72,6 +73,7 @@ async def evaluate_response(
         strategy: memory strategy used to generate the response
         message_history_id: optional link to MessageHistory record
         context: optional conversation context (for judge reference)
+        rag_search_log_id: optional link to RAGSearchLog for retrieval attribution
 
     Returns:
         EvaluationLog record with scores, or None if evaluation failed.
@@ -119,6 +121,7 @@ async def evaluate_response(
 
     evaluation = EvaluationLog(
         message_history_id=message_history_id,
+        rag_search_log_id=rag_search_log_id,
         strategy=strategy,
         relevance=scores['relevance'],
         politeness=scores['politeness'],
@@ -142,10 +145,13 @@ async def evaluate_response(
 async def evaluate_history_entry(
     db: AsyncSession,
     history: MessageHistory,
-    strategy: str = 'none',
     context: str = '',
 ) -> EvaluationLog | None:
-    """Evaluate an existing MessageHistory entry."""
+    """Evaluate an existing MessageHistory entry.
+
+    Uses the strategy stored in MessageHistory (not an external label).
+    """
+    strategy = getattr(history, 'strategy', 'hybrid')
     return await evaluate_response(
         db=db,
         client_message=history.source_text,
@@ -158,26 +164,32 @@ async def evaluate_history_entry(
 
 async def batch_evaluate(
     db: AsyncSession,
-    strategy: str = 'none',
+    strategy: str | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
     """Run LLM-as-Judge evaluation on un-evaluated MessageHistory entries.
 
+    If strategy is provided, only evaluate entries generated with that strategy.
+    If strategy is None, evaluate all un-evaluated entries using their stored strategy.
+
     Returns summary statistics.
     """
-    # Find MessageHistory entries not yet evaluated for this strategy
+    # Find MessageHistory entries not yet evaluated
     evaluated_ids = select(EvaluationLog.message_history_id).where(
-        EvaluationLog.strategy == strategy,
         EvaluationLog.message_history_id.isnot(None),
     )
-    result = await db.execute(
+    query = (
         select(MessageHistory)
         .where(
             MessageHistory.mode == 'reply',
             ~MessageHistory.id.in_(evaluated_ids),
         )
-        .order_by(MessageHistory.created_at.desc())
-        .limit(limit)
+    )
+    if strategy:
+        query = query.where(MessageHistory.strategy == strategy)
+
+    result = await db.execute(
+        query.order_by(MessageHistory.created_at.desc()).limit(limit)
     )
     entries = result.scalars().all()
 
@@ -188,7 +200,7 @@ async def batch_evaluate(
     }
 
     for entry in entries:
-        ev = await evaluate_history_entry(db, entry, strategy)
+        ev = await evaluate_history_entry(db, entry)
         if ev and ev.overall > 0:
             evaluated += 1
             for key in scores_accum:

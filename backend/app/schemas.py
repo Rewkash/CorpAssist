@@ -115,11 +115,13 @@ class ImproveDraftResponse(BaseModel):
 class HistoryItem(BaseModel):
     id: int
     mode: str
+    strategy: str = 'hybrid'
     source_text: str
     result_text: str
     sentiment: str
     topics: str
     formality: str
+    context_length_chars: int = 0
     created_at: datetime
 
     class Config:

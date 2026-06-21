@@ -314,6 +314,7 @@ async def hybrid_search(
     - 'none'         → no memory context (empty results)
     - 'recent'       → no search (handled by caller, returns empty)
     - 'topic'        → topic-match only
+    - 'vector'       → vector search only
     - 'hybrid'       → topic + vector + RRF
     - 'hybrid_decay' → hybrid + temporal decay
 
@@ -342,9 +343,9 @@ async def hybrid_search(
     if use_topic and current_topics:
         topic_results = await _topic_match(db, client_id, current_topics, exclude_ids)
 
-    # Channel 2: Vector search (used for 'hybrid', 'hybrid_decay')
+    # Channel 2: Vector search (used for 'vector', 'hybrid', 'hybrid_decay')
     vector_results: list[tuple[ConversationSummary, float]] = []
-    use_vector = strategy in ('hybrid', 'hybrid_decay')
+    use_vector = strategy in ('vector', 'hybrid', 'hybrid_decay')
     if use_vector and query_embedding and _HAS_PGVECTOR:
         vector_results = await _vector_search(db, client_id, query_embedding, exclude_ids)
 

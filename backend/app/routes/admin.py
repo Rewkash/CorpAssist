@@ -128,7 +128,7 @@ async def bootstrap_embeddings(
 async def run_evaluation(
     _: User = Depends(require_role('admin')),
     db: AsyncSession = Depends(get_db),
-    strategy: str = 'hybrid',
+    strategy: str | None = None,
     limit: int = 50,
 ) -> dict:
     """Run LLM-as-Judge evaluation on un-evaluated reply suggestions.

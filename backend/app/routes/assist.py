@@ -34,11 +34,13 @@ async def suggest_reply(
         MessageHistory(
             user_id=user.id,
             mode='reply',
+            strategy=payload.strategy,
             source_text=payload.text,
             result_text='\n---\n'.join(suggestions),
             sentiment=analysis.sentiment,
             topics=', '.join(analysis.topics),
             formality=analysis.formality,
+            context_length_chars=len(context),
         )
     )
     await db.commit()
@@ -63,11 +65,13 @@ async def improve_draft(
         MessageHistory(
             user_id=user.id,
             mode='improve',
+            strategy=payload.strategy,
             source_text=payload.text,
             result_text=improved,
             sentiment=analysis.sentiment,
             topics=', '.join(analysis.topics),
             formality=analysis.formality,
+            context_length_chars=len(context),
         )
     )
     await db.commit()
